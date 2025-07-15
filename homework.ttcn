@@ -1,0 +1,95 @@
+module SimpleCommunication {
+
+  // Message type definition
+  type record MyMessage {
+    integer id,
+    charstring payload
+  }
+
+
+  // Templates to match specific messages
+  template MyMessage t_request := {
+    id := 1,
+    payload := "Hello from Sender"
+  }
+
+  template MyMessage t_response := {
+    id := 2,
+    payload := "Hi Sender, this is Receiver"
+  }
+
+  // Port type for communication
+  type port MyPort message {
+    inout MyMessage;
+  }
+
+  // Component A: Sender
+  type component SenderComp {
+    port MyPort p_out;
+  }
+
+  // Component B: Receiver
+  type component ReceiverComp {
+    port MyPort p_in;
+  }
+
+  // Behavior for the receiver component
+  function f_receiver() runs on ReceiverComp {
+    var MyMessage rx_msg;
+    
+    // Wait for incoming message
+    p_in.receive(t_request) -> value rx_msg {
+      log("Receiver got message: ", rx_msg);
+    }
+
+    // Send a response back
+    var MyMessage reply := {
+      id := 2,
+      payload := "Hi Sender, this is Receiver"
+    };
+    p_in.send(reply);
+  }
+
+  // Behavior for the sender component
+  function f_sender() runs on SenderComp {
+    var MyMessage msg := {
+      id := 1,
+      payload := "Hello from Sender"
+    };
+
+    // Send message to receiver
+    p_out.send(msg);
+
+    // Wait for response and verify it matches template
+    p_out.receive(t_response) {
+      log("Sender received valid response from Receiver.");
+    } else {
+      setverdict(fail, "Unexpected response!");
+    }
+  }
+
+  // Main test case
+  testcase tc_parallel_communication() runs on default {
+    var SenderComp sender := SenderComp.create;
+    var ReceiverComp receiver := ReceiverComp.create;
+
+    // Connect sender's out port to receiver's in port (bidirectional)
+    connect(sender:p_out, receiver:p_in);
+
+    // Run both components in parallel
+    parallel {
+      sender.start(f_sender());
+      receiver.start(f_receiver());
+    }
+
+    // Wait for both to finish
+    sender.done;
+    receiver.done;
+
+    setverdict(pass);
+  }
+
+  control {
+    execute(tc_parallel_communication());
+  }
+}
