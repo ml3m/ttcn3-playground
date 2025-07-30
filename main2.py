@@ -360,11 +360,11 @@ class TTCN3Parser:
         FIXED: Count the number of objects in a log(PRINT_UC, ...) statement.
         
         Properly handles both forms:
-        1. log(PRINT_UC, "obj1, obj2, obj3") - counts as 1 object (single string)
-        2. log(PRINT_UC, "obj1", "obj2", "obj3") - counts as 3 objects (separate parameters)
+        1. log(PRINT_UC, "obj1, obj2, obj3") - checks content inside string for multiple objects
+        2. log(PRINT_UC, "obj1", "obj2", "obj3") - counts separate parameters
         
-        The key insight is that we need to count the comma-separated PARAMETERS to the log function,
-        not commas within string literals.
+        NEW BEHAVIOR: If there's a single string parameter, we analyze its content for 
+        comma-separated values to determine if it represents multiple objects.
         """
         # Extract content after log(PRINT_UC,
         match = re.search(r'log\s*\(\s*PRINT_UC\s*(?:,\s*(.*))?\)', print_uc_statement, re.IGNORECASE | re.DOTALL)
@@ -377,10 +377,44 @@ class TTCN3Parser:
         
         content = content.strip()
         
-        # FIXED: Enhanced object counting that properly handles string literals
-        # This counts actual parameters to the log function, not content within strings
-        objects = []
-        current_object = ""
+        # STEP 1: Parse the parameters to the log function
+        parameters = self._parse_log_parameters(content)
+        
+        # STEP 2: If we have exactly one parameter and it's a string literal,
+        # check if it contains multiple comma-separated objects
+        if len(parameters) == 1:
+            param = parameters[0].strip()
+            if self._is_string_literal(param):
+                # Extract the content inside the string and count objects within it
+                string_content = self._extract_string_content(param)
+                if string_content:
+                    internal_objects = self._count_objects_in_string(string_content)
+                    if internal_objects > 1:
+                        # Debug output
+                        print(f"DEBUG: Single string parameter contains {internal_objects} objects: {param}")
+                        return internal_objects
+                    else:
+                        return 1  # Single object in string
+                else:
+                    return 1  # Empty string counts as 1 object
+            else:
+                return 1  # Single non-string parameter
+        
+        # STEP 3: Multiple parameters - count them directly
+        result = len(parameters)
+        
+        # Debug output for verification
+        if result > 1:
+            print(f"DEBUG: Found {result} separate parameters in: {print_uc_statement}")
+            for i, param in enumerate(parameters):
+                print(f"  Parameter {i+1}: {param}")
+        
+        return result
+    
+    def _parse_log_parameters(self, content: str) -> List[str]:
+        """Parse the parameters of the log function, respecting string boundaries."""
+        parameters = []
+        current_param = ""
         paren_depth = 0
         bracket_depth = 0
         brace_depth = 0
@@ -393,69 +427,96 @@ class TTCN3Parser:
             
             # Handle escape sequences in strings
             if escape_next:
-                current_object += char
+                current_param += char
                 escape_next = False
                 i += 1
                 continue
             
             if char == '\\' and in_string:
                 escape_next = True
-                current_object += char
+                current_param += char
                 i += 1
                 continue
             
             # Handle string boundaries
             if char == '"':
                 in_string = not in_string
-                current_object += char
+                current_param += char
             elif not in_string:
                 # Only count structural elements when not inside a string
                 if char == '(':
                     paren_depth += 1
-                    current_object += char
+                    current_param += char
                 elif char == ')':
                     paren_depth -= 1
-                    current_object += char
+                    current_param += char
                 elif char == '[':
                     bracket_depth += 1
-                    current_object += char
+                    current_param += char
                 elif char == ']':
                     bracket_depth -= 1
-                    current_object += char
+                    current_param += char
                 elif char == '{':
                     brace_depth += 1
-                    current_object += char
+                    current_param += char
                 elif char == '}':
                     brace_depth -= 1
-                    current_object += char
+                    current_param += char
                 elif char == ',' and paren_depth == 0 and bracket_depth == 0 and brace_depth == 0:
                     # Found a top-level comma (parameter separator)
-                    obj = current_object.strip()
-                    if obj:
-                        objects.append(obj)
-                    current_object = ""
+                    param = current_param.strip()
+                    if param:
+                        parameters.append(param)
+                    current_param = ""
                     i += 1
                     continue
                 else:
-                    current_object += char
+                    current_param += char
             else:
                 # Inside a string, just add the character
-                current_object += char
+                current_param += char
             
             i += 1
         
-        # Add the last object
-        obj = current_object.strip()
-        if obj:
-            objects.append(obj)
+        # Add the last parameter
+        param = current_param.strip()
+        if param:
+            parameters.append(param)
         
-        # Debug output for verification (can be removed in production)
-        if len(objects) > 1:
-            print(f"DEBUG: Found {len(objects)} objects in: {print_uc_statement}")
-            for i, obj in enumerate(objects):
-                print(f"  Object {i+1}: {obj}")
+        return parameters
+    
+    def _is_string_literal(self, param: str) -> bool:
+        """Check if a parameter is a string literal (starts and ends with quotes)."""
+        param = param.strip()
+        return len(param) >= 2 and param.startswith('"') and param.endswith('"')
+    
+    def _extract_string_content(self, string_literal: str) -> str:
+        """Extract the content from inside a string literal."""
+        string_literal = string_literal.strip()
+        if len(string_literal) >= 2 and string_literal.startswith('"') and string_literal.endswith('"'):
+            return string_literal[1:-1]  # Remove surrounding quotes
+        return ""
+    
+    def _count_objects_in_string(self, string_content: str) -> int:
+        """
+        Count objects within a string by looking for comma-separated values.
+        This handles the case where we have "obj1, obj2, obj3" and need to count it as 3 objects.
+        """
+        if not string_content.strip():
+            return 0
         
-        return len(objects)
+        # Split by comma and count non-empty parts
+        # This is a simple approach - we could make it more sophisticated if needed
+        parts = [part.strip() for part in string_content.split(',')]
+        non_empty_parts = [part for part in parts if part]
+        
+        # Debug output
+        if len(non_empty_parts) > 1:
+            print(f"DEBUG: String content '{string_content}' contains {len(non_empty_parts)} comma-separated objects:")
+            for i, part in enumerate(non_empty_parts):
+                print(f"  Object {i+1}: '{part}'")
+        
+        return max(1, len(non_empty_parts))  # At least 1 object even if no commas
     
     def parse_functions(self, content: str) -> List[FunctionInfo]:
         """FIXED: Parse all functions and altsteps from TTCN-3 content with comprehensive detection."""
