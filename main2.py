@@ -164,7 +164,7 @@ class TTCN3Parser:
         
         return '\n'.join(cleaned_lines), lines
     
-    def find_all_function_declarations(self, content: str, original_lines: List[str]) -> List[Tuple[str, str, int, int, int]]:
+    def find_all_function_declarations(self, content: str, original_lines: List[str], include_testcases: bool = False) -> List[Tuple[str, str, int, int, int]]:
         """
         FIXED: Find ALL function/altstep/testcase declarations with comprehensive pattern matching.
         Returns list of (function_type, function_name, start_line, declaration_end_line, body_start_pos) tuples.
@@ -185,6 +185,10 @@ class TTCN3Parser:
                 if match:
                     function_type = match.group(1).lower()
                     function_name = match.group(2)
+                    
+                    # Skip testcases if not included
+                    if function_type == "testcase" and not include_testcases:
+                        continue
                     
                     # Find the complete declaration including parameters and opening brace
                     decl_start_pos = content.find(lines[line_num])
@@ -752,7 +756,7 @@ class TTCN3Parser:
         
         return max(1, len(non_empty_parts))  # At least 1 object even if no commas
     
-    def parse_functions(self, content: str) -> List[FunctionInfo]:
+    def parse_functions(self, content: str, include_testcases: bool = False) -> List[FunctionInfo]:
         """FIXED: Parse all functions and altsteps from TTCN-3 content with comprehensive detection."""
         # Remove comments while preserving line structure
         cleaned_content, original_lines = self.remove_comments_preserve_structure(content)
@@ -760,7 +764,7 @@ class TTCN3Parser:
         functions = []
         
         # FIXED: Use the improved function detection
-        function_declarations = self.find_all_function_declarations(cleaned_content, original_lines)
+        function_declarations = self.find_all_function_declarations(cleaned_content, original_lines, include_testcases)
         
         for function_type_str, function_name, start_line, brace_line, brace_pos in function_declarations:
             # Determine function type
@@ -801,7 +805,7 @@ class TTCN3Parser:
         
         return functions
     
-    def parse_file(self, file_path: str, debug: bool = False) -> List[FunctionInfo]:
+    def parse_file(self, file_path: str, debug: bool = False, include_testcases: bool = False) -> List[FunctionInfo]:
         """FIXED: Parse a single TTCN-3 file with enhanced error handling."""
         try:
             with open(file_path, 'r', encoding='utf-8', errors='replace') as file:
@@ -810,11 +814,12 @@ class TTCN3Parser:
             if debug:
                 print(f"  Parsing {os.path.basename(file_path)} ({len(content)} characters)")
             
-            functions = self.parse_functions(content)
+            functions = self.parse_functions(content, include_testcases)
             
             if debug:
                 if functions:
-                    print(f"    → Found {len(functions)} functions/altsteps")
+                    entity_type = "functions/altsteps/testcases" if include_testcases else "functions/altsteps"
+                    print(f"    → Found {len(functions)} {entity_type}")
                     for func in functions:
                         print_uc_info = ""
                         if func.print_uc_occurrences:
@@ -828,7 +833,8 @@ class TTCN3Parser:
                             print(f"        → has_print_uc_with_multiple_objects: {func.has_print_uc_with_multiple_objects}")
                             print(f"        → qualifies_for_part2: {func.qualifies_for_part2}")
                 else:
-                    print(f"    → No functions/altsteps found")
+                    entity_type = "functions/altsteps/testcases" if include_testcases else "functions/altsteps"
+                    print(f"    → No {entity_type} found")
             
             return functions
         except Exception as e:
@@ -838,7 +844,7 @@ class TTCN3Parser:
                 traceback.print_exc()
             return []
     
-    def parse_directory(self, directory_path: str, recursive: bool = False, debug: bool = False) -> Dict[str, List[FunctionInfo]]:
+    def parse_directory(self, directory_path: str, recursive: bool = False, debug: bool = False, include_testcases: bool = False) -> Dict[str, List[FunctionInfo]]:
         """FIXED: Parse all TTCN-3 files in a directory with comprehensive file detection."""
         results = {}
         directory = Path(directory_path)
@@ -883,7 +889,7 @@ class TTCN3Parser:
         
         for file_path in ttcn_files:
             try:
-                functions = self.parse_file(str(file_path), debug)
+                functions = self.parse_file(str(file_path), debug, include_testcases)
                 # ALWAYS add file to results, even if no functions found
                 results[str(file_path)] = functions
                 
@@ -898,10 +904,11 @@ class TTCN3Parser:
                 files_with_errors += 1
         
         # Print detailed processing statistics
+        entity_type = "functions/altsteps/testcases" if include_testcases else "functions/altsteps"
         print(f"\nProcessing Summary:")
         print(f"  Total files examined: {len(ttcn_files)}")
-        print(f"  Files with functions/altsteps: {files_with_functions}")
-        print(f"  Files without functions/altsteps: {files_without_functions}")
+        print(f"  Files with {entity_type}: {files_with_functions}")
+        print(f"  Files without {entity_type}: {files_without_functions}")
         if files_with_errors > 0:
             print(f"  Files with parsing errors: {files_with_errors}")
         
@@ -1056,9 +1063,11 @@ class ResultFormatter:
         print("EXECUTION COMPLETE")
         print("=" * 80)
         print(f"✅ Successfully processed {len(results)} TTCN-3 files")
+        entity_type = "functions/altsteps/testcases" if args.include_testcases else "functions/altsteps"
         print(f"📁 Files with candidates: {files_with_functions}")
         print(f"📄 Files without candidates: {files_without_functions}")
         print(f"🔍 Total candidates analyzed: {total_functions}")
+        print(f"📋 Entity types included: {entity_type}")
         if functions_part2 > 0:
             print(f"🎯 Part 2 candidates found: {functions_part2}")
         if functions_without_print > 0:
@@ -1367,7 +1376,8 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  %(prog)s /path/to/ttcn3/code                     # Parse directory
+  %(prog)s /path/to/ttcn3/code                     # Parse directory (functions/altsteps only)
+  %(prog)s --include_testcases /path/to/ttcn3/code # Parse directory including testcases
   %(prog)s -r /path/to/ttcn3/code                  # Parse directory recursively
   %(prog)s -o results.json /path/to/ttcn3/code     # Parse and export complete results
   %(prog)s --out_no_pfs part1.json .               # Export only Part 1 (no log(PRINT_UC, ...))
@@ -1420,6 +1430,11 @@ PRINT_UC Object Counting Rules:
         action='store_true',
         help='Output only function names instead of detailed JSON format'
     )
+    arg_parser.add_argument(
+        '--include_testcases',
+        action='store_true',
+        help='Include testcases in addition to functions and altsteps (default: only functions and altsteps)'
+    )
     
     # Show help if no arguments provided
     if len(sys.argv) == 1:
@@ -1437,6 +1452,10 @@ PRINT_UC Object Counting Rules:
     print(f"Analyzing: {args.path}")
     if args.recursive:
         print("Mode: Recursive search enabled")
+    if args.include_testcases:
+        print("Mode: Including testcases in addition to functions and altsteps")
+    else:
+        print("Mode: Parsing only functions and altsteps (testcases excluded)")
     if args.output:
         print(f"Complete results output: {args.output}")
     if args.out_no_pfs:
@@ -1456,13 +1475,13 @@ PRINT_UC Object Counting Rules:
     # Determine if target is a file or directory
     if os.path.isfile(args.path):
         if args.path.lower().endswith(('.ttcn', '.ttcn3')):
-            functions = ttcn_parser.parse_file(args.path, args.debug)
+            functions = ttcn_parser.parse_file(args.path, args.debug, args.include_testcases)
             results = {args.path: functions}
         else:
             print(f"Error: '{args.path}' is not a TTCN-3 file.")
             return 1
     elif os.path.isdir(args.path):
-        results = ttcn_parser.parse_directory(args.path, recursive=args.recursive, debug=args.debug)
+        results = ttcn_parser.parse_directory(args.path, recursive=args.recursive, debug=args.debug, include_testcases=args.include_testcases)
     else:
         print(f"Error: '{args.path}' does not exist.")
         return 1
