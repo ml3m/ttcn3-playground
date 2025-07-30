@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """
-Advanced TTCN-3 Parser for PRINT_UC Analysis
+Advanced TTCN-3 Parser for log(PRINT_UC, ...) Analysis
 
 This parser analyzes TTCN-3 files to identify functions and altsteps based on
-their PRINT_UC usage patterns:
+their log(PRINT_UC, ...) usage patterns:
 
-Part 1: Functions/altsteps WITHOUT any PRINT_UC statements
-Part 2: Functions/altsteps WITH multiple objects in PRINT_UC OR multiple PRINT_UC statements
+Part 1: Functions/altsteps WITHOUT any log(PRINT_UC, ...) statements
+Part 2: Functions/altsteps WITH multiple objects in log(PRINT_UC, ...) OR multiple log(PRINT_UC, ...) statements
 
 Version: 1.0
 """
@@ -31,7 +31,7 @@ class FunctionType(Enum):
 
 @dataclass
 class PrintUCOccurrence:
-    """Represents a single PRINT_UC occurrence with its object count."""
+    """Represents a single log(PRINT_UC, ...) occurrence with its object count."""
     line_number: int
     object_count: int
     full_statement: str
@@ -48,22 +48,22 @@ class FunctionInfo:
     
     @property
     def has_print_uc(self) -> bool:
-        """Check if function has any PRINT_UC statements."""
+        """Check if function has any log(PRINT_UC, ...) statements."""
         return len(self.print_uc_occurrences) > 0
     
     @property
     def has_multiple_print_uc(self) -> bool:
-        """Check if function has multiple PRINT_UC statements."""
+        """Check if function has multiple log(PRINT_UC, ...) statements."""
         return len(self.print_uc_occurrences) > 1
     
     @property
     def has_print_uc_with_multiple_objects(self) -> bool:
-        """Check if function has PRINT_UC with multiple objects."""
+        """Check if function has log(PRINT_UC, ...) with multiple objects."""
         return any(occurrence.object_count > 1 for occurrence in self.print_uc_occurrences)
     
     @property
     def qualifies_for_part2(self) -> bool:
-        """Check if function qualifies for Part 2 (multiple objects OR multiple PRINT_UC)."""
+        """Check if function qualifies for Part 2 (multiple objects OR multiple log(PRINT_UC, ...))."""
         return self.has_multiple_print_uc or self.has_print_uc_with_multiple_objects
 
 
@@ -77,7 +77,7 @@ class TTCN3Parser:
             re.MULTILINE
         )
         self.print_uc_pattern = re.compile(
-            r'PRINT_UC\s*\([^)]*\)',
+            r'log\s*\(\s*PRINT_UC\s*[,)][^)]*\)',
             re.DOTALL
         )
         
@@ -123,17 +123,20 @@ class TTCN3Parser:
     
     def count_print_uc_objects(self, print_uc_statement: str) -> int:
         """
-        Count the number of objects in a PRINT_UC statement.
+        Count the number of objects in a log(PRINT_UC, ...) statement.
         Handles complex expressions, nested parentheses, and function calls.
+        The PRINT_UC identifier itself is not counted as an object.
         """
-        # Extract content between PRINT_UC parentheses
-        match = re.search(r'PRINT_UC\s*\((.*)\)', print_uc_statement, re.DOTALL)
+        # Extract content after log(PRINT_UC, - looking for objects after PRINT_UC
+        match = re.search(r'log\s*\(\s*PRINT_UC\s*(?:,\s*(.*))?\)', print_uc_statement, re.DOTALL)
         if not match:
             return 0
         
-        content = match.group(1).strip()
-        if not content:
-            return 0
+        content = match.group(1)
+        if content is None or not content.strip():
+            return 0  # log(PRINT_UC) with no additional objects
+        
+        content = content.strip()
         
         # Split by commas, but respect parentheses nesting
         objects = []
@@ -169,7 +172,7 @@ class TTCN3Parser:
     
     def extract_print_uc_occurrences(self, function_body: str, function_start_line: int, 
                                    original_lines: Dict[int, str]) -> List[PrintUCOccurrence]:
-        """Extract all PRINT_UC occurrences from a function body."""
+        """Extract all log(PRINT_UC, ...) occurrences from a function body."""
         occurrences = []
         
         for match in self.print_uc_pattern.finditer(function_body):
@@ -648,15 +651,15 @@ def main():
     """Main function to run the TTCN-3 parser."""
     # Set up command line argument parsing
     arg_parser = argparse.ArgumentParser(
-        description="Advanced TTCN-3 Parser for PRINT_UC Analysis",
+        description="Advanced TTCN-3 Parser for log(PRINT_UC, ...) Analysis",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
   %(prog)s /path/to/ttcn3/code                     # Parse directory
   %(prog)s -r /path/to/ttcn3/code                  # Parse directory recursively
   %(prog)s -o results.json /path/to/ttcn3/code     # Parse and export complete results
-  %(prog)s --out_no_pfs part1.json .               # Export only Part 1 (no PRINT_UC)
-  %(prog)s --out_pfs part2.json .                  # Export only Part 2 (PRINT_UC rules)
+  %(prog)s --out_no_pfs part1.json .               # Export only Part 1 (no log(PRINT_UC, ...))
+  %(prog)s --out_pfs part2.json .                  # Export only Part 2 (log(PRINT_UC, ...) rules)
   %(prog)s --out_no_pfs part1.json --out_pfs part2.json .  # Export both parts separately
   %(prog)s -r -o full.json --out_no_pfs p1.json .  # Recursive with multiple exports
   %(prog)s single_file.ttcn                        # Parse single file
@@ -681,12 +684,12 @@ Examples:
     arg_parser.add_argument(
         '--out_no_pfs',
         metavar='filename.json',
-        help='Export Part 1 results (functions/altsteps WITHOUT PRINT_UC) to JSON file'
+        help='Export Part 1 results (functions/altsteps WITHOUT log(PRINT_UC, ...)) to JSON file'
     )
     arg_parser.add_argument(
         '--out_pfs',
         metavar='filename.json', 
-        help='Export Part 2 results (functions/altsteps WITH multiple PRINT_UC objects or statements) to JSON file'
+        help='Export Part 2 results (functions/altsteps WITH multiple log(PRINT_UC, ...) objects or statements) to JSON file'
     )
     
     # Show help if no arguments provided
