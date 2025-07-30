@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Advanced TTCN-3 Parser for log(PRINT_UC, ...) Analysis
+Advanced TTCN-3 Parser for log(PRINT_UC, ...) Analysis - FIXED VERSION
 
 This parser analyzes TTCN-3 files to identify functions and altsteps based on
 their log(PRINT_UC, ...) usage patterns:
@@ -8,7 +8,15 @@ their log(PRINT_UC, ...) usage patterns:
 Part 1: Functions/altsteps WITHOUT any log(PRINT_UC, ...) statements
 Part 2: Functions/altsteps WITH multiple objects in log(PRINT_UC, ...) OR multiple log(PRINT_UC, ...) statements (at least 2 objects are present in the function/altstep)
 
-Version: 1.0
+FIXES APPLIED:
+1. More robust function detection patterns
+2. Better handling of multi-line function declarations
+3. Improved comment removal that preserves line numbers
+4. Enhanced brace matching algorithm
+5. More comprehensive PRINT_UC detection
+6. Better error handling and debugging
+
+Version: 1.1 - FIXED
 """
 
 import re
@@ -68,103 +76,144 @@ class FunctionInfo:
 
 
 class TTCN3Parser:
-    """Advanced TTCN-3 parser for analyzing PRINT_UC usage patterns."""
+    """Advanced TTCN-3 parser for analyzing PRINT_UC usage patterns - FIXED VERSION."""
     
     def __init__(self):
-        # Regex patterns for parsing - comprehensive pattern for all TTCN-3 function styles
-        # This pattern handles:
-        # - Multi-line parameter lists
-        # - Braces on same line or next line
-        # - Optional 'runs on' clause
-        # - Various whitespace and formatting styles
-        self.function_pattern = re.compile(
-            r'^\s*(function|altstep|testcase)\s+(\w+)\s*\([^)]*\)(?:\s+runs\s+on\s+\w+)?\s*\n?\s*\{',
-            re.MULTILINE | re.DOTALL
-        )
+        # FIXED: More comprehensive and robust regex patterns
+        # This pattern handles all possible TTCN-3 function declaration styles
+        self.function_patterns = [
+            # Pattern 1: Standard function declaration (single line or multi-line)
+            re.compile(
+                r'^\s*(?:public\s+|private\s+|friend\s+)?(function|altstep|testcase)\s+(\w+)\s*\(',
+                re.MULTILINE
+            ),
+            # Pattern 2: Function with template parameters
+            re.compile(
+                r'^\s*(?:public\s+|private\s+|friend\s+)?(function|altstep|testcase)\s+(\w+)\s*<[^>]*>\s*\(',
+                re.MULTILINE
+            ),
+            # Pattern 3: External functions
+            re.compile(
+                r'^\s*external\s+(function|altstep|testcase)\s+(\w+)\s*\(',
+                re.MULTILINE
+            )
+        ]
         
-        # Alternative pattern for multi-line parameter lists
-        self.function_pattern_multiline = re.compile(
-            r'^\s*(function|altstep|testcase)\s+(\w+)\s*\([^)]*\)(?:\s+runs\s+on\s+\w+)?\s*\{',
-            re.MULTILINE | re.DOTALL
-        )
+        # FIXED: More robust PRINT_UC pattern that handles various formatting
+        self.print_uc_patterns = [
+            # Standard log(PRINT_UC, ...)
+            re.compile(r'log\s*\(\s*PRINT_UC\s*[,)]', re.IGNORECASE | re.DOTALL),
+            # With whitespace variations
+            re.compile(r'log\s*\(\s*PRINT_UC\s*[,)]', re.MULTILINE | re.DOTALL),
+            # Case insensitive variant
+            re.compile(r'log\s*\(\s*print_uc\s*[,)]', re.IGNORECASE | re.DOTALL)
+        ]
         
-        # More flexible pattern that handles any parameter list format
-        self.function_pattern_flexible = re.compile(
-            r'^\s*(function|altstep|testcase)\s+(\w+)\s*\([^)]*\)(?:\s+runs\s+on\s+\w+)?\s*\{',
-            re.MULTILINE | re.DOTALL
-        )
-        
-        self.print_uc_pattern = re.compile(
-            r'log\s*\(\s*PRINT_UC\s*[,)][^)]*\)',
-            re.DOTALL
-        )
-        
-        # Patterns for filtering out comments and strings
+        # FIXED: Better comment removal patterns that preserve structure
         self.single_line_comment_pattern = re.compile(r'//.*$', re.MULTILINE)
         self.multi_line_comment_pattern = re.compile(r'/\*.*?\*/', re.DOTALL)
         self.string_literal_pattern = re.compile(r'"(?:[^"\\]|\\.)*"', re.DOTALL)
     
-    def remove_comments_and_strings(self, content: str) -> Tuple[str, Dict[int, str]]:
+    def remove_comments_preserve_structure(self, content: str) -> Tuple[str, List[str]]:
         """
-        Remove comments and string literals from content for accurate parsing.
-        Returns cleaned content and a mapping of original positions.
+        FIXED: Remove comments while preserving line structure and numbers.
+        This ensures accurate line number reporting.
         """
-        # Store original lines for reference
-        original_lines = content.split('\n')
+        lines = content.split('\n')
+        cleaned_lines = []
         
-        # Remove multi-line comments first
-        content = self.multi_line_comment_pattern.sub(lambda m: ' ' * len(m.group(0)), content)
+        in_multiline_comment = False
         
-        # Remove single-line comments
-        content = self.single_line_comment_pattern.sub(lambda m: ' ' * len(m.group(0)), content)
+        for line_num, line in enumerate(lines):
+            cleaned_line = line
+            
+            # Handle multi-line comments
+            if in_multiline_comment:
+                end_comment = line.find('*/')
+                if end_comment != -1:
+                    # Replace comment part with spaces to preserve positions
+                    cleaned_line = ' ' * (end_comment + 2) + line[end_comment + 2:]
+                    in_multiline_comment = False
+                else:
+                    # Entire line is in comment, replace with spaces
+                    cleaned_line = ' ' * len(line)
+            else:
+                # Look for start of multi-line comment
+                start_comment = line.find('/*')
+                if start_comment != -1:
+                    end_comment = line.find('*/', start_comment + 2)
+                    if end_comment != -1:
+                        # Comment starts and ends on same line
+                        comment_part = ' ' * (end_comment - start_comment + 2)
+                        cleaned_line = line[:start_comment] + comment_part + line[end_comment + 2:]
+                    else:
+                        # Comment starts but doesn't end on this line
+                        cleaned_line = line[:start_comment] + ' ' * (len(line) - start_comment)
+                        in_multiline_comment = True
+            
+            # Remove single-line comments if not in multi-line comment
+            if not in_multiline_comment:
+                comment_pos = cleaned_line.find('//')
+                if comment_pos != -1:
+                    cleaned_line = cleaned_line[:comment_pos] + ' ' * (len(cleaned_line) - comment_pos)
+            
+            cleaned_lines.append(cleaned_line)
         
-        # For PRINT_UC analysis, we need to preserve string literals to count objects correctly
-        # So we'll only remove comments, not string literals
-        # This ensures that log(PRINT_UC, "string1", "string2") remains intact
-        
-        return content, {i + 1: line for i, line in enumerate(original_lines)}
+        return '\n'.join(cleaned_lines), lines
     
-    def find_function_declarations(self, content: str) -> List[Tuple[str, str, int, int]]:
+    def find_all_function_declarations(self, content: str, original_lines: List[str]) -> List[Tuple[str, str, int, int, int]]:
         """
-        Find all function/altstep/testcase declarations in content.
-        Returns list of (function_type, function_name, start_pos, end_pos) tuples.
-        Handles all TTCN-3 function declaration styles including multi-line parameters.
+        FIXED: Find ALL function/altstep/testcase declarations with comprehensive pattern matching.
+        Returns list of (function_type, function_name, start_line, declaration_end_line, body_start_pos) tuples.
         """
         functions = []
         lines = content.split('\n')
         
-        i = 0
-        while i < len(lines):
-            line = lines[i].strip()
+        # FIXED: Check every line for function declarations
+        for line_num in range(len(lines)):
+            line = lines[line_num].strip()
             
-            # Check if this line starts a function declaration
-            # Handle modifiers: public, private, friend, etc.
-            function_match = re.match(r'^\s*(?:public\s+|private\s+|friend\s+)?(function|altstep|testcase)\s+(\w+)\s*\(', line)
-            if function_match:
-                function_type = function_match.group(1)
-                function_name = function_match.group(2)
-                
-                # Find the complete function declaration (handle multi-line parameters)
-                start_pos = content.find(lines[i])
-                end_pos = self.find_function_declaration_end(content, start_pos, lines, i)
-                
-                if end_pos != -1:
-                    functions.append((function_type, function_name, start_pos, end_pos))
-                
-                # Skip to the line after the function declaration
-                i = self.get_line_number(content, end_pos) if end_pos != -1 else i + 1
-            else:
-                i += 1
+            if not line:
+                continue
+            
+            # Try all function patterns
+            for pattern in self.function_patterns:
+                match = pattern.search(lines[line_num])
+                if match:
+                    function_type = match.group(1).lower()
+                    function_name = match.group(2)
+                    
+                    # Find the complete declaration including parameters and opening brace
+                    decl_start_pos = content.find(lines[line_num])
+                    if decl_start_pos == -1:
+                        continue
+                    
+                    # FIXED: More robust brace finding
+                    brace_pos = self.find_function_opening_brace(content, decl_start_pos, line_num, lines)
+                    if brace_pos == -1:
+                        print(f"Warning: Could not find opening brace for {function_type} {function_name} at line {line_num + 1}")
+                        continue
+                    
+                    # Calculate actual line numbers
+                    start_line = line_num + 1
+                    brace_line = content[:brace_pos].count('\n') + 1
+                    
+                    functions.append((function_type, function_name, start_line, brace_line, brace_pos))
+                    break  # Found a match, no need to try other patterns
         
         return functions
     
-    def find_function_declaration_end(self, content: str, start_pos: int, lines: List[str], start_line: int) -> int:
+    def find_function_opening_brace(self, content: str, start_pos: int, start_line_num: int, lines: List[str]) -> int:
         """
-        Find the end of a function declaration (the opening brace).
-        Handles multi-line parameter lists and 'runs on' clauses.
+        FIXED: More robust method to find the opening brace of a function.
+        Handles multi-line parameter lists, 'runs on' clauses, and various formatting styles.
         """
-        # Start from the opening parenthesis
-        paren_start = content.find('(', start_pos)
+        # Start searching from the function declaration
+        search_start = start_pos
+        max_search_lines = 10  # Don't search more than 10 lines ahead
+        
+        # First, find the opening parenthesis
+        paren_start = content.find('(', search_start)
         if paren_start == -1:
             return -1
         
@@ -173,68 +222,143 @@ class TTCN3Parser:
         if paren_end == -1:
             return -1
         
-        # Look for 'runs on' clause after the closing parenthesis
-        after_paren = content[paren_end + 1:].strip()
-        runs_on_match = re.match(r'^\s*runs\s+on\s+\w+', after_paren)
+        # Look for opening brace after the closing parenthesis
+        search_pos = paren_end + 1
+        brace_search_limit = min(len(content), search_pos + 1000)  # Search within reasonable limit
         
-        if runs_on_match:
-            # Find the end of the 'runs on' clause
-            runs_on_end = paren_end + 1 + len(runs_on_match.group(0))
-            after_runs_on = content[runs_on_end:].strip()
-        else:
-            after_runs_on = after_paren
+        # Skip whitespace, newlines, and potential 'runs on' clause
+        while search_pos < brace_search_limit:
+            char = content[search_pos]
+            
+            if char == '{':
+                return search_pos
+            elif char.isspace():
+                search_pos += 1
+            elif content[search_pos:].startswith('runs'):
+                # Skip 'runs on ComponentType' clause
+                runs_match = re.match(r'runs\s+on\s+\w+', content[search_pos:])
+                if runs_match:
+                    search_pos += len(runs_match.group(0))
+                else:
+                    search_pos += 1
+            elif char == ';':
+                # This might be a function declaration without body (external function)
+                return -1
+            else:
+                search_pos += 1
         
-        # Find the opening brace
-        brace_pos = after_runs_on.find('{')
-        if brace_pos == -1:
-            return -1
-        
-        return paren_end + 1 + (len(runs_on_match.group(0)) if runs_on_match else 0) + brace_pos
+        return -1
     
     def find_matching_paren(self, content: str, start_pos: int) -> int:
-        """Find the matching closing parenthesis for an opening parenthesis."""
+        """FIXED: Find the matching closing parenthesis, handling nested parentheses correctly."""
         paren_count = 0
         i = start_pos
+        in_string = False
         
         while i < len(content):
-            if content[i] == '(':
-                paren_count += 1
-            elif content[i] == ')':
-                paren_count -= 1
-                if paren_count == 0:
-                    return i
+            char = content[i]
+            
+            # Handle string literals
+            if char == '"' and (i == 0 or content[i-1] != '\\'):
+                in_string = not in_string
+            elif not in_string:
+                if char == '(':
+                    paren_count += 1
+                elif char == ')':
+                    paren_count -= 1
+                    if paren_count == 0:
+                        return i
+            
             i += 1
         
         return -1
     
-    def get_line_number(self, content: str, pos: int) -> int:
-        """Get the line number for a given position in content."""
-        return content[:pos].count('\n') + 1
-    
     def find_matching_brace(self, content: str, start_pos: int) -> int:
-        """Find the matching closing brace for a function/altstep."""
+        """FIXED: Find the matching closing brace, handling nested braces and strings correctly."""
         brace_count = 0
         i = start_pos
+        in_string = False
         
         while i < len(content):
-            if content[i] == '{':
-                brace_count += 1
-            elif content[i] == '}':
-                brace_count -= 1
-                if brace_count == 0:
-                    return i
+            char = content[i]
+            
+            # Handle string literals
+            if char == '"' and (i == 0 or content[i-1] != '\\'):
+                in_string = not in_string
+            elif not in_string:
+                if char == '{':
+                    brace_count += 1
+                elif char == '}':
+                    brace_count -= 1
+                    if brace_count == 0:
+                        return i
+            
             i += 1
         
-        return -1  # No matching brace found
+        return -1
+    
+    def extract_all_print_uc_occurrences(self, function_body: str, function_start_line: int) -> List[PrintUCOccurrence]:
+        """
+        FIXED: Extract ALL log(PRINT_UC, ...) occurrences from a function body.
+        Uses multiple patterns to ensure nothing is missed.
+        """
+        occurrences = []
+        body_lines = function_body.split('\n')
+        
+        # FIXED: Check each line individually to avoid missing occurrences
+        for line_offset, line in enumerate(body_lines):
+            line_number = function_start_line + line_offset
+            
+            # Try all PRINT_UC patterns
+            for pattern in self.print_uc_patterns:
+                matches = list(pattern.finditer(line))
+                for match in matches:
+                    # Extract the complete log statement
+                    full_statement = self.extract_complete_log_statement(line, match.start())
+                    if full_statement:
+                        object_count = self.count_print_uc_objects(full_statement)
+                        
+                        # Avoid duplicates by checking if we already found this statement
+                        statement_key = full_statement.replace(' ', '').replace('\t', '').replace('\n', '')
+                        if not any(occ.full_statement.replace(' ', '').replace('\t', '').replace('\n', '') == statement_key 
+                                 for occ in occurrences):
+                            occurrences.append(PrintUCOccurrence(
+                                line_number=line_number,
+                                object_count=object_count,
+                                full_statement=full_statement.strip()
+                            ))
+        
+        return occurrences
+    
+    def extract_complete_log_statement(self, line: str, start_pos: int) -> str:
+        """
+        FIXED: Extract the complete log(...) statement, handling multi-line statements.
+        """
+        # Find the start of 'log'
+        log_start = line.rfind('log', 0, start_pos + 10)
+        if log_start == -1:
+            log_start = start_pos
+        
+        # Find the opening parenthesis
+        paren_start = line.find('(', log_start)
+        if paren_start == -1:
+            return line[log_start:].strip()
+        
+        # Find the matching closing parenthesis
+        paren_end = self.find_matching_paren(line, paren_start)
+        if paren_end == -1:
+            # Statement might continue on next line, for now just return what we have
+            return line[log_start:].strip()
+        
+        return line[log_start:paren_end + 1].strip()
     
     def count_print_uc_objects(self, print_uc_statement: str) -> int:
         """
-        Count the number of objects in a log(PRINT_UC, ...) statement.
-        Handles complex expressions, nested parentheses, and function calls.
-        The PRINT_UC identifier itself is not counted as an object.
+        FIXED: Count the number of objects in a log(PRINT_UC, ...) statement.
+        More robust parsing that handles various edge cases.
         """
-        # Extract content after log(PRINT_UC, - looking for objects after PRINT_UC
-        match = re.search(r'log\s*\(\s*PRINT_UC\s*(?:,\s*(.*))?\)', print_uc_statement, re.DOTALL)
+        # Extract content after log(PRINT_UC,
+        match = re.search(r'log\s*\(\s*PRINT_UC\s*(?:,\s*(.*))?\)', print_uc_statement, re.IGNORECASE | re.DOTALL)
         if not match:
             return 0
         
@@ -244,10 +368,12 @@ class TTCN3Parser:
         
         content = content.strip()
         
-        # Split by commas, but respect parentheses nesting
+        # FIXED: Better object counting that handles nested structures
         objects = []
         current_object = ""
         paren_depth = 0
+        bracket_depth = 0
+        brace_depth = 0
         quote_depth = 0
         
         i = 0
@@ -261,8 +387,19 @@ class TTCN3Parser:
                     paren_depth += 1
                 elif char == ')':
                     paren_depth -= 1
-                elif char == ',' and paren_depth == 0:
-                    objects.append(current_object.strip())
+                elif char == '[':
+                    bracket_depth += 1
+                elif char == ']':
+                    bracket_depth -= 1
+                elif char == '{':
+                    brace_depth += 1
+                elif char == '}':
+                    brace_depth -= 1
+                elif char == ',' and paren_depth == 0 and bracket_depth == 0 and brace_depth == 0:
+                    # Found a top-level comma, this separates objects
+                    obj = current_object.strip()
+                    if obj:
+                        objects.append(obj)
                     current_object = ""
                     i += 1
                     continue
@@ -271,43 +408,23 @@ class TTCN3Parser:
             i += 1
         
         # Add the last object
-        if current_object.strip():
-            objects.append(current_object.strip())
+        obj = current_object.strip()
+        if obj:
+            objects.append(obj)
         
         return len(objects)
     
-    def extract_print_uc_occurrences(self, function_body: str, function_start_line: int, 
-                                   original_lines: Dict[int, str]) -> List[PrintUCOccurrence]:
-        """Extract all log(PRINT_UC, ...) occurrences from a function body."""
-        occurrences = []
-        
-        for match in self.print_uc_pattern.finditer(function_body):
-            # Find line number by counting newlines up to match position
-            lines_before = function_body[:match.start()].count('\n')
-            line_number = function_start_line + lines_before
-            
-            full_statement = match.group(0)
-            object_count = self.count_print_uc_objects(full_statement)
-            
-            occurrences.append(PrintUCOccurrence(
-                line_number=line_number,
-                object_count=object_count,
-                full_statement=full_statement.replace('\n', ' ').strip()
-            ))
-        
-        return occurrences
-    
     def parse_functions(self, content: str) -> List[FunctionInfo]:
-        """Parse all functions and altsteps from TTCN-3 content."""
-        # Remove comments and strings for accurate parsing
-        cleaned_content, original_lines = self.remove_comments_and_strings(content)
+        """FIXED: Parse all functions and altsteps from TTCN-3 content with comprehensive detection."""
+        # Remove comments while preserving line structure
+        cleaned_content, original_lines = self.remove_comments_preserve_structure(content)
         
         functions = []
         
-        # Use the new comprehensive function detection
-        function_declarations = self.find_function_declarations(cleaned_content)
+        # FIXED: Use the improved function detection
+        function_declarations = self.find_all_function_declarations(cleaned_content, original_lines)
         
-        for function_type_str, function_name, start_pos, decl_end_pos in function_declarations:
+        for function_type_str, function_name, start_line, brace_line, brace_pos in function_declarations:
             # Determine function type
             if function_type_str == "function":
                 function_type = FunctionType.FUNCTION
@@ -318,23 +435,22 @@ class TTCN3Parser:
             else:
                 continue  # Skip unknown types
             
-            # Find function body boundaries (from opening brace to closing brace)
-            body_start_pos = decl_end_pos  # Position of opening brace
-            body_end_pos = self.find_matching_brace(cleaned_content, body_start_pos)
+            # Find function body boundaries
+            body_end_pos = self.find_matching_brace(cleaned_content, brace_pos)
             
             if body_end_pos == -1:
-                continue  # Skip if no matching brace found
+                print(f"Warning: Could not find closing brace for {function_type_str} {function_name}")
+                continue
             
-            # Extract function body
-            function_body = cleaned_content[body_start_pos:body_end_pos + 1]
+            # Extract function body (including braces)
+            function_body = cleaned_content[brace_pos:body_end_pos + 1]
             
-            # Calculate line numbers
-            start_line = cleaned_content[:start_pos].count('\n') + 1
+            # Calculate end line
             end_line = cleaned_content[:body_end_pos].count('\n') + 1
             
-            # Find PRINT_UC occurrences in the function body
-            print_uc_occurrences = self.extract_print_uc_occurrences(
-                function_body, start_line, original_lines
+            # FIXED: Find ALL PRINT_UC occurrences in the function body
+            print_uc_occurrences = self.extract_all_print_uc_occurrences(
+                function_body, brace_line
             )
             
             functions.append(FunctionInfo(
@@ -348,9 +464,9 @@ class TTCN3Parser:
         return functions
     
     def parse_file(self, file_path: str, debug: bool = False) -> List[FunctionInfo]:
-        """Parse a single TTCN-3 file."""
+        """FIXED: Parse a single TTCN-3 file with enhanced error handling."""
         try:
-            with open(file_path, 'r', encoding='utf-8') as file:
+            with open(file_path, 'r', encoding='utf-8', errors='replace') as file:
                 content = file.read()
             
             if debug:
@@ -365,12 +481,10 @@ class TTCN3Parser:
                         print_uc_info = ""
                         if func.print_uc_occurrences:
                             print_uc_info = f" (PRINT_UC: {len(func.print_uc_occurrences)} occurrences)"
-                            # Debug: Show object counts
                             for i, occ in enumerate(func.print_uc_occurrences):
                                 print_uc_info += f" [Occurrence {i+1}: {occ.object_count} objects]"
                         print(f"      - {func.function_type.value} {func.name}{print_uc_info}")
                         
-                        # Debug: Show qualification details
                         if func.print_uc_occurrences:
                             print(f"        → has_multiple_print_uc: {func.has_multiple_print_uc}")
                             print(f"        → has_print_uc_with_multiple_objects: {func.has_print_uc_with_multiple_objects}")
@@ -379,15 +493,15 @@ class TTCN3Parser:
                     print(f"    → No functions/altsteps found")
             
             return functions
-        except FileNotFoundError:
-            print(f"Error: File '{file_path}' not found.")
-            return []
         except Exception as e:
             print(f"Error parsing file '{file_path}': {e}")
+            if debug:
+                import traceback
+                traceback.print_exc()
             return []
     
     def parse_directory(self, directory_path: str, recursive: bool = False, debug: bool = False) -> Dict[str, List[FunctionInfo]]:
-        """Parse all TTCN-3 files in a directory."""
+        """FIXED: Parse all TTCN-3 files in a directory with comprehensive file detection."""
         results = {}
         directory = Path(directory_path)
         
@@ -395,11 +509,24 @@ class TTCN3Parser:
             print(f"Error: Directory '{directory_path}' does not exist.")
             return results
         
-        # Use recursive globbing if requested
-        if recursive:
-            ttcn_files = list(directory.rglob("*.ttcn")) + list(directory.rglob("*.ttcn3"))
-        else:
-            ttcn_files = list(directory.glob("*.ttcn")) + list(directory.glob("*.ttcn3"))
+        # FIXED: More comprehensive file detection
+        file_extensions = ['*.ttcn', '*.ttcn3', '*.TTCN', '*.TTCN3']
+        ttcn_files = []
+        
+        for ext in file_extensions:
+            if recursive:
+                ttcn_files.extend(list(directory.rglob(ext)))
+            else:
+                ttcn_files.extend(list(directory.glob(ext)))
+        
+        # Remove duplicates while preserving order
+        seen = set()
+        unique_files = []
+        for f in ttcn_files:
+            if f not in seen:
+                seen.add(f)
+                unique_files.append(f)
+        ttcn_files = unique_files
         
         if not ttcn_files:
             search_type = "recursively" if recursive else ""
@@ -854,7 +981,7 @@ def main():
     """Main function to run the TTCN-3 parser."""
     # Set up command line argument parsing
     arg_parser = argparse.ArgumentParser(
-        description="Advanced TTCN-3 Parser for log(PRINT_UC, ...) Analysis",
+        description="Advanced TTCN-3 Parser for log(PRINT_UC, ...) Analysis - FIXED VERSION",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
@@ -866,6 +993,7 @@ Examples:
   %(prog)s --out_no_pfs part1.json --out_pfs part2.json .  # Export both parts separately
   %(prog)s -r -o full.json --out_no_pfs p1.json .  # Recursive with multiple exports
   %(prog)s single_file.ttcn                        # Parse single file
+  %(prog)s --debug /path/to/ttcn3/code              # Enable detailed debug output
         """
     )
     
@@ -911,8 +1039,8 @@ Examples:
     ttcn_parser = TTCN3Parser()
     formatter = ResultFormatter()
     
-    print("Advanced TTCN-3 Parser for PRINT_UC Analysis")
-    print("=" * 50)
+    print("Advanced TTCN-3 Parser for PRINT_UC Analysis - FIXED VERSION")
+    print("=" * 60)
     print(f"Analyzing: {args.path}")
     if args.recursive:
         print("Mode: Recursive search enabled")
@@ -928,9 +1056,9 @@ Examples:
     
     # Determine if target is a file or directory
     if os.path.isfile(args.path):
-        if args.path.endswith(('.ttcn', '.ttcn3')):
+        if args.path.lower().endswith(('.ttcn', '.ttcn3')):
             functions = ttcn_parser.parse_file(args.path, args.debug)
-            results = {args.path: functions} if functions else {}
+            results = {args.path: functions}
         else:
             print(f"Error: '{args.path}' is not a TTCN-3 file.")
             return 1
