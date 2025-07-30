@@ -728,7 +728,7 @@ class ResultFormatter:
         print("=" * 80)
     
     @staticmethod
-    def export_results(results: Dict[str, List[FunctionInfo]], output_file: str):
+    def export_results(results: Dict[str, List[FunctionInfo]], output_file: str, only_names: bool = False):
         """Export results to a file in JSON format."""
         if not results:
             print("No results to export.")
@@ -749,102 +749,120 @@ class ResultFormatter:
         # Part 2: Functions/altsteps WITH multiple PRINT_UC or multiple objects
         part2_functions = [f for f in all_functions if f.qualifies_for_part2]
         
-        # Prepare export data
-        export_data = {
-            "summary": {
-                "total_functions": len(all_functions),
-                "functions_with_print_uc": len([f for f in all_functions if f.has_print_uc]),
-                "functions_without_print_uc_part1": len(part1_functions),
-                "functions_qualifying_part2": len(part2_functions),
-                "files_processed": len(results)
-            },
-            "part1_functions": [],
-            "part2_functions": [],
-            "all_functions_details": []
-        }
-        
-        # Group Part 1 functions by file
-        part1_by_file = {}
-        for func in part1_functions:
-            for file_path, file_functions in results.items():
-                if func in file_functions:
-                    if file_path not in part1_by_file:
-                        part1_by_file[file_path] = []
-                    part1_by_file[file_path].append({
-                        "name": func.name,
-                        "type": func.function_type.value,
-                        "start_line": func.start_line,
-                        "end_line": func.end_line,
-                        "file": os.path.basename(file_path)
-                    })
-                    break
-        
-        export_data["part1_functions"] = part1_by_file
-        
-        # Group Part 2 functions by file
-        part2_by_file = {}
-        for func in part2_functions:
-            for file_path, file_functions in results.items():
-                if func in file_functions:
-                    if file_path not in part2_by_file:
-                        part2_by_file[file_path] = []
-                    
-                    func_data = {
-                        "name": func.name,
-                        "type": func.function_type.value,
-                        "start_line": func.start_line,
-                        "end_line": func.end_line,
-                        "file": os.path.basename(file_path),
-                        "reasons": [],
-                        "print_uc_occurrences": []
-                    }
-                    
-                    # Add reasons
-                    if func.has_multiple_print_uc:
-                        func_data["reasons"].append(f"Multiple PRINT_UC statements ({len(func.print_uc_occurrences)})")
-                    if func.has_print_uc_with_multiple_objects:
-                        multi_obj_occurrences = [occ for occ in func.print_uc_occurrences if occ.object_count > 1]
-                        func_data["reasons"].append(f"PRINT_UC with multiple objects ({len(multi_obj_occurrences)} occurrences)")
-                    
-                    # Add PRINT_UC details
-                    for occurrence in func.print_uc_occurrences:
-                        func_data["print_uc_occurrences"].append({
-                            "line_number": occurrence.line_number,
-                            "object_count": occurrence.object_count,
-                            "statement": occurrence.full_statement
+        if only_names:
+            # Export only function names
+            export_data = {
+                "summary": {
+                    "total_functions": len(all_functions),
+                    "functions_with_print_uc": len([f for f in all_functions if f.has_print_uc]),
+                    "functions_without_print_uc_part1": len(part1_functions),
+                    "functions_qualifying_part2": len(part2_functions),
+                    "files_processed": len(results)
+                },
+                "all_function_names": [func.name for func in all_functions],
+                "part1_function_names": [func.name for func in part1_functions],
+                "part2_function_names": [func.name for func in part2_functions]
+            }
+        else:
+            # Prepare detailed export data
+            export_data = {
+                "summary": {
+                    "total_functions": len(all_functions),
+                    "functions_with_print_uc": len([f for f in all_functions if f.has_print_uc]),
+                    "functions_without_print_uc_part1": len(part1_functions),
+                    "functions_qualifying_part2": len(part2_functions),
+                    "files_processed": len(results)
+                },
+                "part1_functions": [],
+                "part2_functions": [],
+                "all_functions_details": []
+            }
+            
+            # Group Part 1 functions by file
+            part1_by_file = {}
+            for func in part1_functions:
+                for file_path, file_functions in results.items():
+                    if func in file_functions:
+                        if file_path not in part1_by_file:
+                            part1_by_file[file_path] = []
+                        part1_by_file[file_path].append({
+                            "name": func.name,
+                            "type": func.function_type.value,
+                            "start_line": func.start_line,
+                            "end_line": func.end_line,
+                            "file": os.path.basename(file_path)
                         })
-                    
-                    part2_by_file[file_path].append(func_data)
-                    break
-        
-        export_data["part2_functions"] = part2_by_file
-        
-        # Add all functions details for reference
-        for file_path, functions in results.items():
-            for func in functions:
-                func_detail = {
-                    "name": func.name,
-                    "type": func.function_type.value,
-                    "file": file_path,
-                    "start_line": func.start_line,
-                    "end_line": func.end_line,
-                    "has_print_uc": func.has_print_uc,
-                    "qualifies_part1": not func.has_print_uc,
-                    "qualifies_part2": func.qualifies_for_part2,
-                    "print_uc_count": len(func.print_uc_occurrences)
-                }
-                export_data["all_functions_details"].append(func_detail)
+                        break
+            
+            export_data["part1_functions"] = part1_by_file
+            
+            # Group Part 2 functions by file
+            part2_by_file = {}
+            for func in part2_functions:
+                for file_path, file_functions in results.items():
+                    if func in file_functions:
+                        if file_path not in part2_by_file:
+                            part2_by_file[file_path] = []
+                        
+                        func_data = {
+                            "name": func.name,
+                            "type": func.function_type.value,
+                            "start_line": func.start_line,
+                            "end_line": func.end_line,
+                            "file": os.path.basename(file_path),
+                            "reasons": [],
+                            "print_uc_occurrences": []
+                        }
+                        
+                        # Add reasons
+                        if func.has_multiple_print_uc:
+                            func_data["reasons"].append(f"Multiple PRINT_UC statements ({len(func.print_uc_occurrences)})")
+                        if func.has_print_uc_with_multiple_objects:
+                            multi_obj_occurrences = [occ for occ in func.print_uc_occurrences if occ.object_count > 1]
+                            func_data["reasons"].append(f"PRINT_UC with multiple objects ({len(multi_obj_occurrences)} occurrences)")
+                        
+                        # Add PRINT_UC details
+                        for occurrence in func.print_uc_occurrences:
+                            func_data["print_uc_occurrences"].append({
+                                "line_number": occurrence.line_number,
+                                "object_count": occurrence.object_count,
+                                "statement": occurrence.full_statement
+                            })
+                        
+                        part2_by_file[file_path].append(func_data)
+                        break
+            
+            export_data["part2_functions"] = part2_by_file
+            
+            # Add all functions details for reference
+            for file_path, functions in results.items():
+                for func in functions:
+                    func_detail = {
+                        "name": func.name,
+                        "type": func.function_type.value,
+                        "file": file_path,
+                        "start_line": func.start_line,
+                        "end_line": func.end_line,
+                        "has_print_uc": func.has_print_uc,
+                        "qualifies_part1": not func.has_print_uc,
+                        "qualifies_part2": func.qualifies_for_part2,
+                        "print_uc_count": len(func.print_uc_occurrences)
+                    }
+                    export_data["all_functions_details"].append(func_detail)
         
         # Write to file
         try:
             with open(output_file, 'w', encoding='utf-8') as f:
                 json.dump(export_data, f, indent=2, ensure_ascii=False)
-            print(f"Results exported to '{output_file}'")
+            if only_names:
+                print(f"Function names exported to '{output_file}' ({len(all_functions)} total functions)")
+            else:
+                print(f"Results exported to '{output_file}'")
         except Exception as e:
             print(f"Error exporting results to '{output_file}': {e}")
     
     @staticmethod
-    def export_part1_results(results: Dict[str, List[FunctionInfo]], output_file: str):
+    def export_part1_results(results: Dict[str, List[FunctionInfo]], output_file: str, only_names: bool = False):
         """Export Part 1 results (functions/altsteps WITHOUT PRINT_UC) to JSON file."""
         if not results:
             print("No results to export for Part 1.")
@@ -862,45 +880,58 @@ class ResultFormatter:
             print("No Part 1 functions (without PRINT_UC) found to export.")
             return
         
-        # Prepare export data
-        export_data = {
-            "summary": {
-                "total_part1_functions": len(part1_functions),
-                "files_processed": len(results),
-                "description": "Functions and altsteps WITHOUT PRINT_UC statements"
-            },
-            "part1_functions": {}
-        }
-        
-        # Group Part 1 functions by file
-        part1_by_file = {}
-        for func in part1_functions:
-            for file_path, file_functions in results.items():
-                if func in file_functions:
-                    if file_path not in part1_by_file:
-                        part1_by_file[file_path] = []
-                    part1_by_file[file_path].append({
-                        "name": func.name,
-                        "type": func.function_type.value,
-                        "start_line": func.start_line,
-                        "end_line": func.end_line,
-                        "file": os.path.basename(file_path),
-                        "full_path": file_path
-                    })
-                    break
-        
-        export_data["part1_functions"] = part1_by_file
+        if only_names:
+            # Export only function names
+            export_data = {
+                "summary": {
+                    "total_part1_functions": len(part1_functions),
+                    "description": "Functions and altsteps WITHOUT PRINT_UC statements"
+                },
+                "function_names": [func.name for func in part1_functions]
+            }
+        else:
+            # Prepare detailed export data
+            export_data = {
+                "summary": {
+                    "total_part1_functions": len(part1_functions),
+                    "files_processed": len(results),
+                    "description": "Functions and altsteps WITHOUT PRINT_UC statements"
+                },
+                "part1_functions": {}
+            }
+            
+            # Group Part 1 functions by file
+            part1_by_file = {}
+            for func in part1_functions:
+                for file_path, file_functions in results.items():
+                    if func in file_functions:
+                        if file_path not in part1_by_file:
+                            part1_by_file[file_path] = []
+                        part1_by_file[file_path].append({
+                            "name": func.name,
+                            "type": func.function_type.value,
+                            "start_line": func.start_line,
+                            "end_line": func.end_line,
+                            "file": os.path.basename(file_path),
+                            "full_path": file_path
+                        })
+                        break
+            
+            export_data["part1_functions"] = part1_by_file
         
         # Write to file
         try:
             with open(output_file, 'w', encoding='utf-8') as f:
                 json.dump(export_data, f, indent=2, ensure_ascii=False)
-            print(f"Part 1 results (no PRINT_UC) exported to '{output_file}' ({len(part1_functions)} functions)")
+            if only_names:
+                print(f"Part 1 function names exported to '{output_file}' ({len(part1_functions)} functions)")
+            else:
+                print(f"Part 1 results (no PRINT_UC) exported to '{output_file}' ({len(part1_functions)} functions)")
         except Exception as e:
             print(f"Error exporting Part 1 results to '{output_file}': {e}")
     
     @staticmethod
-    def export_part2_results(results: Dict[str, List[FunctionInfo]], output_file: str):
+    def export_part2_results(results: Dict[str, List[FunctionInfo]], output_file: str, only_names: bool = False):
         """Export Part 2 results (functions/altsteps WITH multiple PRINT_UC objects or statements) to JSON file."""
         if not results:
             print("No results to export for Part 2.")
@@ -918,61 +949,74 @@ class ResultFormatter:
             print("No Part 2 functions (with multiple PRINT_UC objects/statements) found to export.")
             return
         
-        # Prepare export data
-        export_data = {
-            "summary": {
-                "total_part2_functions": len(part2_functions),
-                "files_processed": len(results),
-                "description": "Functions and altsteps WITH multiple objects in PRINT_UC OR multiple PRINT_UC statements"
-            },
-            "part2_functions": {}
-        }
-        
-        # Group Part 2 functions by file
-        part2_by_file = {}
-        for func in part2_functions:
-            for file_path, file_functions in results.items():
-                if func in file_functions:
-                    if file_path not in part2_by_file:
-                        part2_by_file[file_path] = []
-                    
-                    func_data = {
-                        "name": func.name,
-                        "type": func.function_type.value,
-                        "start_line": func.start_line,
-                        "end_line": func.end_line,
-                        "file": os.path.basename(file_path),
-                        "full_path": file_path,
-                        "reasons": [],
-                        "print_uc_count": len(func.print_uc_occurrences),
-                        "print_uc_occurrences": []
-                    }
-                    
-                    # Add reasons
-                    if func.has_multiple_print_uc:
-                        func_data["reasons"].append(f"Multiple PRINT_UC statements ({len(func.print_uc_occurrences)})")
-                    if func.has_print_uc_with_multiple_objects:
-                        multi_obj_occurrences = [occ for occ in func.print_uc_occurrences if occ.object_count > 1]
-                        func_data["reasons"].append(f"PRINT_UC with multiple objects ({len(multi_obj_occurrences)} occurrences)")
-                    
-                    # Add PRINT_UC details
-                    for occurrence in func.print_uc_occurrences:
-                        func_data["print_uc_occurrences"].append({
-                            "line_number": occurrence.line_number,
-                            "object_count": occurrence.object_count,
-                            "statement": occurrence.full_statement
-                        })
-                    
-                    part2_by_file[file_path].append(func_data)
-                    break
-        
-        export_data["part2_functions"] = part2_by_file
+        if only_names:
+            # Export only function names
+            export_data = {
+                "summary": {
+                    "total_part2_functions": len(part2_functions),
+                    "description": "Functions and altsteps WITH multiple objects in PRINT_UC OR multiple PRINT_UC statements"
+                },
+                "function_names": [func.name for func in part2_functions]
+            }
+        else:
+            # Prepare detailed export data
+            export_data = {
+                "summary": {
+                    "total_part2_functions": len(part2_functions),
+                    "files_processed": len(results),
+                    "description": "Functions and altsteps WITH multiple objects in PRINT_UC OR multiple PRINT_UC statements"
+                },
+                "part2_functions": {}
+            }
+            
+            # Group Part 2 functions by file
+            part2_by_file = {}
+            for func in part2_functions:
+                for file_path, file_functions in results.items():
+                    if func in file_functions:
+                        if file_path not in part2_by_file:
+                            part2_by_file[file_path] = []
+                        
+                        func_data = {
+                            "name": func.name,
+                            "type": func.function_type.value,
+                            "start_line": func.start_line,
+                            "end_line": func.end_line,
+                            "file": os.path.basename(file_path),
+                            "full_path": file_path,
+                            "reasons": [],
+                            "print_uc_count": len(func.print_uc_occurrences),
+                            "print_uc_occurrences": []
+                        }
+                        
+                        # Add reasons
+                        if func.has_multiple_print_uc:
+                            func_data["reasons"].append(f"Multiple PRINT_UC statements ({len(func.print_uc_occurrences)})")
+                        if func.has_print_uc_with_multiple_objects:
+                            multi_obj_occurrences = [occ for occ in func.print_uc_occurrences if occ.object_count > 1]
+                            func_data["reasons"].append(f"PRINT_UC with multiple objects ({len(multi_obj_occurrences)} occurrences)")
+                        
+                        # Add PRINT_UC details
+                        for occurrence in func.print_uc_occurrences:
+                            func_data["print_uc_occurrences"].append({
+                                "line_number": occurrence.line_number,
+                                "object_count": occurrence.object_count,
+                                "statement": occurrence.full_statement
+                            })
+                        
+                        part2_by_file[file_path].append(func_data)
+                        break
+            
+            export_data["part2_functions"] = part2_by_file
         
         # Write to file
         try:
             with open(output_file, 'w', encoding='utf-8') as f:
                 json.dump(export_data, f, indent=2, ensure_ascii=False)
-            print(f"Part 2 results (with PRINT_UC rules) exported to '{output_file}' ({len(part2_functions)} functions)")
+            if only_names:
+                print(f"Part 2 function names exported to '{output_file}' ({len(part2_functions)} functions)")
+            else:
+                print(f"Part 2 results (with PRINT_UC rules) exported to '{output_file}' ({len(part2_functions)} functions)")
         except Exception as e:
             print(f"Error exporting Part 2 results to '{output_file}': {e}")
 
@@ -994,6 +1038,8 @@ Examples:
   %(prog)s -r -o full.json --out_no_pfs p1.json .  # Recursive with multiple exports
   %(prog)s single_file.ttcn                        # Parse single file
   %(prog)s --debug /path/to/ttcn3/code              # Enable detailed debug output
+  %(prog)s --only_names -o names.json .             # Export only function names
+  %(prog)s --only_names --out_pfs part2_names.json . # Export only Part 2 function names
         """
     )
     
@@ -1027,6 +1073,11 @@ Examples:
         action='store_true',
         help='Enable debug mode to print detailed parsing information'
     )
+    arg_parser.add_argument(
+        '--only_names',
+        action='store_true',
+        help='Output only function names instead of detailed JSON format'
+    )
     
     # Show help if no arguments provided
     if len(sys.argv) == 1:
@@ -1052,6 +1103,8 @@ Examples:
         print(f"Part 2 output (PRINT_UC rules): {args.out_pfs}")
     if args.debug:
         print("Debug mode enabled: Detailed parsing information will be printed.")
+    if args.only_names:
+        print("Only names mode enabled: Will output only function names.")
     print()
     
     # Determine if target is a file or directory
@@ -1075,19 +1128,19 @@ Examples:
     export_performed = False
     if args.output:
         print()  # Add spacing before export message
-        formatter.export_results(results, args.output)
+        formatter.export_results(results, args.output, args.only_names)
         export_performed = True
     
     if args.out_no_pfs:
         if not export_performed:
             print()  # Add spacing before export message
-        formatter.export_part1_results(results, args.out_no_pfs)
+        formatter.export_part1_results(results, args.out_no_pfs, args.only_names)
         export_performed = True
     
     if args.out_pfs:
         if not export_performed:
             print()  # Add spacing before export message
-        formatter.export_part2_results(results, args.out_pfs)
+        formatter.export_part2_results(results, args.out_pfs, args.only_names)
         export_performed = True
     
     return 0
