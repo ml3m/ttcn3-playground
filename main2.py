@@ -303,21 +303,35 @@ class TTCN3Parser:
     def extract_all_print_uc_occurrences(self, function_body: str, function_start_line: int) -> List[PrintUCOccurrence]:
         """
         FIXED: Extract ALL log(PRINT_UC, ...) occurrences from a function body.
-        Uses multiple patterns to ensure nothing is missed.
+        
+        SPECIAL HANDLING FOR ALTSTEPS:
+        - Altsteps can have multiple [] blocks (alternatives)
+        - Each [] block can contain log(PRINT_UC, ...) statements
+        - We need to scan ALL blocks, not just the first one
+        
+        Uses multiple approaches to ensure nothing is missed:
+        1. Line-by-line scanning (works for all function types)
+        2. Multi-line statement reconstruction
+        3. Comprehensive pattern matching
         """
         occurrences = []
         body_lines = function_body.split('\n')
         
-        # FIXED: Check each line individually to avoid missing occurrences
-        for line_offset, line in enumerate(body_lines):
-            line_number = function_start_line + line_offset
+        # APPROACH 1: Line-by-line scanning with enhanced multi-line support
+        i = 0
+        while i < len(body_lines):
+            line = body_lines[i]
+            line_number = function_start_line + i
             
-            # Try all PRINT_UC patterns
+            # Try all PRINT_UC patterns on current line
             for pattern in self.print_uc_patterns:
                 matches = list(pattern.finditer(line))
                 for match in matches:
-                    # Extract the complete log statement
-                    full_statement = self.extract_complete_log_statement(line, match.start())
+                    # Try to extract complete statement (might span multiple lines)
+                    full_statement = self._extract_complete_log_statement_multiline(
+                        body_lines, i, match.start()
+                    )
+                    
                     if full_statement:
                         object_count = self.count_print_uc_objects_fixed(full_statement)
                         
@@ -330,8 +344,228 @@ class TTCN3Parser:
                                 object_count=object_count,
                                 full_statement=full_statement.strip()
                             ))
+            i += 1
+        
+        # APPROACH 2: Enhanced scanning for altsteps with multiple [] blocks
+        # This ensures we catch PRINT_UC statements in all alternative blocks
+        full_body = '\n'.join(body_lines)
+        additional_occurrences = self._scan_altstep_alternatives(full_body, function_start_line)
+        
+        # Merge additional occurrences, avoiding duplicates
+        for new_occ in additional_occurrences:
+            statement_key = new_occ.full_statement.replace(' ', '').replace('\t', '').replace('\n', '')
+            if not any(occ.full_statement.replace(' ', '').replace('\t', '').replace('\n', '') == statement_key 
+                     for occ in occurrences):
+                occurrences.append(new_occ)
+        
+        # APPROACH 3: Final comprehensive scan for any missed occurrences
+        # This uses a different strategy to catch edge cases
+        final_occurrences = self._comprehensive_print_uc_scan(full_body, function_start_line)
+        
+        # Merge final occurrences, avoiding duplicates
+        for new_occ in final_occurrences:
+            statement_key = new_occ.full_statement.replace(' ', '').replace('\t', '').replace('\n', '')
+            if not any(occ.full_statement.replace(' ', '').replace('\t', '').replace('\n', '') == statement_key 
+                     for occ in occurrences):
+                occurrences.append(new_occ)
         
         return occurrences
+    
+    def _extract_complete_log_statement_multiline(self, lines: List[str], start_line_idx: int, start_pos: int) -> str:
+        """
+        Extract a complete log(...) statement that might span multiple lines.
+        This is especially important for altsteps where statements can be formatted across lines.
+        """
+        if start_line_idx >= len(lines):
+            return ""
+        
+        # Find the start of 'log' on the current line
+        current_line = lines[start_line_idx]
+        log_start = current_line.rfind('log', 0, start_pos + 10)
+        if log_start == -1:
+            log_start = start_pos
+        
+        # Start building the statement
+        statement_parts = []
+        
+        # Add the part from the current line
+        statement_parts.append(current_line[log_start:])
+        
+        # Find the opening parenthesis
+        full_statement_so_far = ''.join(statement_parts)
+        paren_start = full_statement_so_far.find('(')
+        if paren_start == -1:
+            return statement_parts[0].strip()
+        
+        # Look for the matching closing parenthesis, potentially across multiple lines
+        paren_count = 0
+        in_string = False
+        found_complete = False
+        
+        line_idx = start_line_idx
+        while line_idx < len(lines) and not found_complete:
+            if line_idx > start_line_idx:
+                # Add the entire next line
+                statement_parts.append('\n' + lines[line_idx])
+            
+            # Check the accumulated statement
+            full_statement = ''.join(statement_parts)
+            
+            # Find matching parenthesis
+            i = paren_start if line_idx == start_line_idx else 0
+            while i < len(full_statement):
+                char = full_statement[i]
+                
+                if char == '"' and (i == 0 or full_statement[i-1] != '\\'):
+                    in_string = not in_string
+                elif not in_string:
+                    if char == '(':
+                        paren_count += 1
+                    elif char == ')':
+                        paren_count -= 1
+                        if paren_count == 0:
+                            # Found the complete statement
+                            return full_statement[:i+1].strip()
+                i += 1
+            
+            line_idx += 1
+            if line_idx - start_line_idx > 5:  # Prevent infinite loops
+                break
+        
+        # Return what we have, even if incomplete
+        return ''.join(statement_parts).strip()
+    
+    def _scan_altstep_alternatives(self, body: str, function_start_line: int) -> List[PrintUCOccurrence]:
+        """
+        Special scanning for altsteps that handles multiple [] alternative blocks.
+        
+        Altstep structure:
+        altstep name() {
+          [] condition1 { log(PRINT_UC, ...); }
+          [] condition2 { log(PRINT_UC, ...); }
+          [] condition3 { log(PRINT_UC, ...); }
+        }
+        
+        This method ensures we scan ALL [] blocks, not just the first one.
+        """
+        occurrences = []
+        
+        # Find all [] blocks in the altstep
+        # Pattern to match [] blocks with their content
+        alt_block_pattern = re.compile(r'\[\s*\].*?(?=\[\s*\]|$)', re.DOTALL)
+        
+        matches = alt_block_pattern.finditer(body)
+        for match in matches:
+            block_content = match.group(0)
+            block_start_pos = match.start()
+            
+            # Calculate the line number where this block starts
+            lines_before_block = body[:block_start_pos].count('\n')
+            block_start_line = function_start_line + lines_before_block
+            
+            # Scan this specific block for PRINT_UC occurrences
+            block_lines = block_content.split('\n')
+            for line_idx, line in enumerate(block_lines):
+                line_number = block_start_line + line_idx
+                
+                # Try all PRINT_UC patterns
+                for pattern in self.print_uc_patterns:
+                    line_matches = list(pattern.finditer(line))
+                    for line_match in line_matches:
+                        # Extract the complete log statement
+                        full_statement = self._extract_complete_log_from_line(line, line_match.start())
+                        if full_statement:
+                            object_count = self.count_print_uc_objects_fixed(full_statement)
+                            
+                            occurrences.append(PrintUCOccurrence(
+                                line_number=line_number,
+                                object_count=object_count,
+                                full_statement=full_statement.strip()
+                            ))
+        
+        return occurrences
+    
+    def _comprehensive_print_uc_scan(self, body: str, function_start_line: int) -> List[PrintUCOccurrence]:
+        """
+        Comprehensive scan using a different approach to catch any missed PRINT_UC occurrences.
+        This method uses regex to find ALL log(PRINT_UC, ...) patterns in the entire body.
+        """
+        occurrences = []
+        
+        # More comprehensive regex patterns for finding log(PRINT_UC, ...)
+        comprehensive_patterns = [
+            # Standard patterns
+            re.compile(r'log\s*\(\s*PRINT_UC\s*(?:,.*?)?\)', re.IGNORECASE | re.DOTALL),
+            # With various whitespace and formatting
+            re.compile(r'log\s*\(\s*PRINT_UC\s*[,)].*?(?=;|\n|$)', re.IGNORECASE | re.MULTILINE),
+            # Case variations
+            re.compile(r'log\s*\(\s*print_uc\s*(?:,.*?)?\)', re.IGNORECASE | re.DOTALL),
+        ]
+        
+        for pattern in comprehensive_patterns:
+            matches = pattern.finditer(body)
+            for match in matches:
+                full_statement = match.group(0)
+                
+                # Calculate line number
+                lines_before = body[:match.start()].count('\n')
+                line_number = function_start_line + lines_before
+                
+                # Clean up the statement (remove trailing content that's not part of the log call)
+                clean_statement = self._clean_log_statement(full_statement)
+                
+                if clean_statement:
+                    object_count = self.count_print_uc_objects_fixed(clean_statement)
+                    
+                    occurrences.append(PrintUCOccurrence(
+                        line_number=line_number,
+                        object_count=object_count,
+                        full_statement=clean_statement.strip()
+                    ))
+        
+        return occurrences
+    
+    def _extract_complete_log_from_line(self, line: str, start_pos: int) -> str:
+        """Extract a complete log(...) statement from a single line."""
+        # Find the start of 'log'
+        log_start = line.rfind('log', 0, start_pos + 10)
+        if log_start == -1:
+            log_start = start_pos
+        
+        # Find the opening parenthesis
+        paren_start = line.find('(', log_start)
+        if paren_start == -1:
+            return line[log_start:].strip()
+        
+        # Find the matching closing parenthesis
+        paren_end = self.find_matching_paren(line, paren_start)
+        if paren_end == -1:
+            # Statement might be incomplete, return what we have
+            return line[log_start:].strip()
+        
+        return line[log_start:paren_end + 1].strip()
+    
+    def _clean_log_statement(self, statement: str) -> str:
+        """
+        Clean a log statement by ensuring it ends properly.
+        Remove any trailing content that's not part of the log call.
+        """
+        statement = statement.strip()
+        
+        # Find the log( part
+        log_match = re.search(r'log\s*\(', statement, re.IGNORECASE)
+        if not log_match:
+            return statement
+        
+        log_start = log_match.start()
+        paren_start = log_match.end() - 1
+        
+        # Find the matching closing parenthesis
+        paren_end = self.find_matching_paren(statement, paren_start)
+        if paren_end != -1:
+            return statement[log_start:paren_end + 1]
+        
+        return statement
     
     def extract_complete_log_statement(self, line: str, start_pos: int) -> str:
         """
