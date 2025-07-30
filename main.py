@@ -71,11 +71,29 @@ class TTCN3Parser:
     """Advanced TTCN-3 parser for analyzing PRINT_UC usage patterns."""
     
     def __init__(self):
-        # Regex patterns for parsing
+        # Regex patterns for parsing - comprehensive pattern for all TTCN-3 function styles
+        # This pattern handles:
+        # - Multi-line parameter lists
+        # - Braces on same line or next line
+        # - Optional 'runs on' clause
+        # - Various whitespace and formatting styles
         self.function_pattern = re.compile(
-            r'^\s*(function|altstep|testcase)\s+(\w+)\s*\([^)]*\)(?:\s+runs\s+on\s+\w+)?\s*\{',
-            re.MULTILINE
+            r'^\s*(function|altstep|testcase)\s+(\w+)\s*\([^)]*\)(?:\s+runs\s+on\s+\w+)?\s*\n?\s*\{',
+            re.MULTILINE | re.DOTALL
         )
+        
+        # Alternative pattern for multi-line parameter lists
+        self.function_pattern_multiline = re.compile(
+            r'^\s*(function|altstep|testcase)\s+(\w+)\s*\([^)]*\)(?:\s+runs\s+on\s+\w+)?\s*\{',
+            re.MULTILINE | re.DOTALL
+        )
+        
+        # More flexible pattern that handles any parameter list format
+        self.function_pattern_flexible = re.compile(
+            r'^\s*(function|altstep|testcase)\s+(\w+)\s*\([^)]*\)(?:\s+runs\s+on\s+\w+)?\s*\{',
+            re.MULTILINE | re.DOTALL
+        )
+        
         self.print_uc_pattern = re.compile(
             r'log\s*\(\s*PRINT_UC\s*[,)][^)]*\)',
             re.DOTALL
@@ -85,7 +103,7 @@ class TTCN3Parser:
         self.single_line_comment_pattern = re.compile(r'//.*$', re.MULTILINE)
         self.multi_line_comment_pattern = re.compile(r'/\*.*?\*/', re.DOTALL)
         self.string_literal_pattern = re.compile(r'"(?:[^"\\]|\\.)*"', re.DOTALL)
-        
+    
     def remove_comments_and_strings(self, content: str) -> Tuple[str, Dict[int, str]]:
         """
         Remove comments and string literals from content for accurate parsing.
@@ -104,6 +122,93 @@ class TTCN3Parser:
         content = self.string_literal_pattern.sub(lambda m: ' ' * len(m.group(0)), content)
         
         return content, {i + 1: line for i, line in enumerate(original_lines)}
+    
+    def find_function_declarations(self, content: str) -> List[Tuple[str, str, int, int]]:
+        """
+        Find all function/altstep/testcase declarations in content.
+        Returns list of (function_type, function_name, start_pos, end_pos) tuples.
+        Handles all TTCN-3 function declaration styles including multi-line parameters.
+        """
+        functions = []
+        lines = content.split('\n')
+        
+        i = 0
+        while i < len(lines):
+            line = lines[i].strip()
+            
+            # Check if this line starts a function declaration
+            # Handle modifiers: public, private, friend, etc.
+            function_match = re.match(r'^\s*(?:public\s+|private\s+|friend\s+)?(function|altstep|testcase)\s+(\w+)\s*\(', line)
+            if function_match:
+                function_type = function_match.group(1)
+                function_name = function_match.group(2)
+                
+                # Find the complete function declaration (handle multi-line parameters)
+                start_pos = content.find(lines[i])
+                end_pos = self.find_function_declaration_end(content, start_pos, lines, i)
+                
+                if end_pos != -1:
+                    functions.append((function_type, function_name, start_pos, end_pos))
+                
+                # Skip to the line after the function declaration
+                i = self.get_line_number(content, end_pos) if end_pos != -1 else i + 1
+            else:
+                i += 1
+        
+        return functions
+    
+    def find_function_declaration_end(self, content: str, start_pos: int, lines: List[str], start_line: int) -> int:
+        """
+        Find the end of a function declaration (the opening brace).
+        Handles multi-line parameter lists and 'runs on' clauses.
+        """
+        # Start from the opening parenthesis
+        paren_start = content.find('(', start_pos)
+        if paren_start == -1:
+            return -1
+        
+        # Find the matching closing parenthesis
+        paren_end = self.find_matching_paren(content, paren_start)
+        if paren_end == -1:
+            return -1
+        
+        # Look for 'runs on' clause after the closing parenthesis
+        after_paren = content[paren_end + 1:].strip()
+        runs_on_match = re.match(r'^\s*runs\s+on\s+\w+', after_paren)
+        
+        if runs_on_match:
+            # Find the end of the 'runs on' clause
+            runs_on_end = paren_end + 1 + len(runs_on_match.group(0))
+            after_runs_on = content[runs_on_end:].strip()
+        else:
+            after_runs_on = after_paren
+        
+        # Find the opening brace
+        brace_pos = after_runs_on.find('{')
+        if brace_pos == -1:
+            return -1
+        
+        return paren_end + 1 + (len(runs_on_match.group(0)) if runs_on_match else 0) + brace_pos
+    
+    def find_matching_paren(self, content: str, start_pos: int) -> int:
+        """Find the matching closing parenthesis for an opening parenthesis."""
+        paren_count = 0
+        i = start_pos
+        
+        while i < len(content):
+            if content[i] == '(':
+                paren_count += 1
+            elif content[i] == ')':
+                paren_count -= 1
+                if paren_count == 0:
+                    return i
+            i += 1
+        
+        return -1
+    
+    def get_line_number(self, content: str, pos: int) -> int:
+        """Get the line number for a given position in content."""
+        return content[:pos].count('\n') + 1
     
     def find_matching_brace(self, content: str, start_pos: int) -> int:
         """Find the matching closing brace for a function/altstep."""
@@ -198,10 +303,10 @@ class TTCN3Parser:
         
         functions = []
         
-        for match in self.function_pattern.finditer(cleaned_content):
-            function_type_str = match.group(1)
-            function_name = match.group(2)
-            
+        # Use the new comprehensive function detection
+        function_declarations = self.find_function_declarations(cleaned_content)
+        
+        for function_type_str, function_name, start_pos, decl_end_pos in function_declarations:
             # Determine function type
             if function_type_str == "function":
                 function_type = FunctionType.FUNCTION
@@ -212,19 +317,19 @@ class TTCN3Parser:
             else:
                 continue  # Skip unknown types
             
-            # Find function body boundaries
-            start_pos = match.end() - 1  # Position of opening brace
-            end_pos = self.find_matching_brace(cleaned_content, start_pos)
+            # Find function body boundaries (from opening brace to closing brace)
+            body_start_pos = decl_end_pos  # Position of opening brace
+            body_end_pos = self.find_matching_brace(cleaned_content, body_start_pos)
             
-            if end_pos == -1:
+            if body_end_pos == -1:
                 continue  # Skip if no matching brace found
             
             # Extract function body
-            function_body = cleaned_content[start_pos:end_pos + 1]
+            function_body = cleaned_content[body_start_pos:body_end_pos + 1]
             
             # Calculate line numbers
-            start_line = cleaned_content[:match.start()].count('\n') + 1
-            end_line = cleaned_content[:end_pos].count('\n') + 1
+            start_line = cleaned_content[:start_pos].count('\n') + 1
+            end_line = cleaned_content[:body_end_pos].count('\n') + 1
             
             # Find PRINT_UC occurrences in the function body
             print_uc_occurrences = self.extract_print_uc_occurrences(
@@ -241,12 +346,29 @@ class TTCN3Parser:
         
         return functions
     
-    def parse_file(self, file_path: str) -> List[FunctionInfo]:
+    def parse_file(self, file_path: str, debug: bool = False) -> List[FunctionInfo]:
         """Parse a single TTCN-3 file."""
         try:
             with open(file_path, 'r', encoding='utf-8') as file:
                 content = file.read()
-            return self.parse_functions(content)
+            
+            if debug:
+                print(f"  Parsing {os.path.basename(file_path)} ({len(content)} characters)")
+            
+            functions = self.parse_functions(content)
+            
+            if debug:
+                if functions:
+                    print(f"    → Found {len(functions)} functions/altsteps")
+                    for func in functions:
+                        print_uc_info = ""
+                        if func.print_uc_occurrences:
+                            print_uc_info = f" (PRINT_UC: {len(func.print_uc_occurrences)} occurrences)"
+                        print(f"      - {func.function_type.value} {func.name}{print_uc_info}")
+                else:
+                    print(f"    → No functions/altsteps found")
+            
+            return functions
         except FileNotFoundError:
             print(f"Error: File '{file_path}' not found.")
             return []
@@ -254,7 +376,7 @@ class TTCN3Parser:
             print(f"Error parsing file '{file_path}': {e}")
             return []
     
-    def parse_directory(self, directory_path: str, recursive: bool = False) -> Dict[str, List[FunctionInfo]]:
+    def parse_directory(self, directory_path: str, recursive: bool = False, debug: bool = False) -> Dict[str, List[FunctionInfo]]:
         """Parse all TTCN-3 files in a directory."""
         results = {}
         directory = Path(directory_path)
@@ -276,10 +398,37 @@ class TTCN3Parser:
         
         print(f"Found {len(ttcn_files)} TTCN-3 files {'(recursive search)' if recursive else ''}")
         
+        if debug:
+            print(f"\nDetailed parsing information:")
+        
+        # Track processing statistics
+        files_with_functions = 0
+        files_without_functions = 0
+        files_with_errors = 0
+        
         for file_path in ttcn_files:
-            functions = self.parse_file(str(file_path))
-            if functions:
+            try:
+                functions = self.parse_file(str(file_path), debug)
+                # ALWAYS add file to results, even if no functions found
                 results[str(file_path)] = functions
+                
+                if functions:
+                    files_with_functions += 1
+                else:
+                    files_without_functions += 1
+                    
+            except Exception as e:
+                print(f"Error processing file '{file_path}': {e}")
+                results[str(file_path)] = []  # Still add to results with empty list
+                files_with_errors += 1
+        
+        # Print detailed processing statistics
+        print(f"\nProcessing Summary:")
+        print(f"  Total files examined: {len(ttcn_files)}")
+        print(f"  Files with functions/altsteps: {files_with_functions}")
+        print(f"  Files without functions/altsteps: {files_without_functions}")
+        if files_with_errors > 0:
+            print(f"  Files with parsing errors: {files_with_errors}")
         
         return results
 
@@ -314,11 +463,26 @@ class ResultFormatter:
         
         # Collect all functions from all files
         all_functions = []
+        files_with_functions = 0
+        files_without_functions = 0
+        
         for file_path, functions in results.items():
             all_functions.extend(functions)
+            if functions:
+                files_with_functions += 1
+            else:
+                files_without_functions += 1
         
         if not all_functions:
-            print("No functions or altsteps found.")
+            print("No functions or altsteps found in any files.")
+            print(f"\nFiles examined: {len(results)}")
+            print(f"Files without functions/altsteps: {files_without_functions}")
+            
+            if files_without_functions > 0:
+                print("\nFiles without functions/altsteps:")
+                for file_path, functions in results.items():
+                    if not functions:
+                        print(f"  {os.path.basename(file_path)}")
             return
         
         # Part 1: Functions/altsteps WITHOUT PRINT_UC
@@ -382,7 +546,7 @@ class ResultFormatter:
         else:
             print("  None found.")
         
-        # Summary statistics
+        # Summary statistics - improved to show all file information
         print(f"\n" + "=" * 80)
         print("SUMMARY STATISTICS")
         print("=" * 80)
@@ -391,11 +555,40 @@ class ResultFormatter:
         functions_without_print = len(part1_functions)
         functions_part2 = len(part2_functions)
         
+        print(f"Total files examined: {len(results)}")
+        print(f"Files with functions/altsteps: {files_with_functions}")
+        print(f"Files without functions/altsteps: {files_without_functions}")
         print(f"Total functions/altsteps analyzed: {total_functions}")
         print(f"Functions WITH PRINT_UC: {functions_with_print}")
         print(f"Functions WITHOUT PRINT_UC (Part 1): {functions_without_print}")
         print(f"Functions qualifying for Part 2: {functions_part2}")
-        print(f"Files processed: {len(results)}")
+        
+        # Show files without functions if any
+        if files_without_functions > 0:
+            print(f"\nFiles without functions/altsteps:")
+            for file_path, functions in results.items():
+                if not functions:
+                    print(f"  {os.path.basename(file_path)}")
+        
+        # Show files with candidates (functions/altsteps)
+        print(f"\nFiles with candidates (functions/altsteps):")
+        for file_path, functions in results.items():
+            if functions:
+                print(f"  {os.path.basename(file_path)} ({len(functions)} candidates)")
+        
+        # Final summary message
+        print(f"\n" + "=" * 80)
+        print("EXECUTION COMPLETE")
+        print("=" * 80)
+        print(f"✅ Successfully processed {len(results)} TTCN-3 files")
+        print(f"📁 Files with candidates: {files_with_functions}")
+        print(f"📄 Files without candidates: {files_without_functions}")
+        print(f"🔍 Total candidates analyzed: {total_functions}")
+        if functions_part2 > 0:
+            print(f"🎯 Part 2 candidates found: {functions_part2}")
+        if functions_without_print > 0:
+            print(f"📋 Part 1 candidates found: {functions_without_print}")
+        print("=" * 80)
     
     @staticmethod
     def export_results(results: Dict[str, List[FunctionInfo]], output_file: str):
@@ -691,6 +884,11 @@ Examples:
         metavar='filename.json', 
         help='Export Part 2 results (functions/altsteps WITH multiple log(PRINT_UC, ...) objects or statements) to JSON file'
     )
+    arg_parser.add_argument(
+        '--debug',
+        action='store_true',
+        help='Enable debug mode to print detailed parsing information'
+    )
     
     # Show help if no arguments provided
     if len(sys.argv) == 1:
@@ -714,18 +912,20 @@ Examples:
         print(f"Part 1 output (no PRINT_UC): {args.out_no_pfs}")
     if args.out_pfs:
         print(f"Part 2 output (PRINT_UC rules): {args.out_pfs}")
+    if args.debug:
+        print("Debug mode enabled: Detailed parsing information will be printed.")
     print()
     
     # Determine if target is a file or directory
     if os.path.isfile(args.path):
         if args.path.endswith(('.ttcn', '.ttcn3')):
-            functions = ttcn_parser.parse_file(args.path)
+            functions = ttcn_parser.parse_file(args.path, args.debug)
             results = {args.path: functions} if functions else {}
         else:
             print(f"Error: '{args.path}' is not a TTCN-3 file.")
             return 1
     elif os.path.isdir(args.path):
-        results = ttcn_parser.parse_directory(args.path, recursive=args.recursive)
+        results = ttcn_parser.parse_directory(args.path, recursive=args.recursive, debug=args.debug)
     else:
         print(f"Error: '{args.path}' does not exist.")
         return 1
