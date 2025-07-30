@@ -509,6 +509,139 @@ class ResultFormatter:
             print(f"Results exported to '{output_file}'")
         except Exception as e:
             print(f"Error exporting results to '{output_file}': {e}")
+    
+    @staticmethod
+    def export_part1_results(results: Dict[str, List[FunctionInfo]], output_file: str):
+        """Export Part 1 results (functions/altsteps WITHOUT PRINT_UC) to JSON file."""
+        if not results:
+            print("No results to export for Part 1.")
+            return
+        
+        # Collect all functions from all files
+        all_functions = []
+        for file_path, functions in results.items():
+            all_functions.extend(functions)
+        
+        # Part 1: Functions/altsteps WITHOUT PRINT_UC
+        part1_functions = [f for f in all_functions if not f.has_print_uc]
+        
+        if not part1_functions:
+            print("No Part 1 functions (without PRINT_UC) found to export.")
+            return
+        
+        # Prepare export data
+        export_data = {
+            "summary": {
+                "total_part1_functions": len(part1_functions),
+                "files_processed": len(results),
+                "description": "Functions and altsteps WITHOUT PRINT_UC statements"
+            },
+            "part1_functions": {}
+        }
+        
+        # Group Part 1 functions by file
+        part1_by_file = {}
+        for func in part1_functions:
+            for file_path, file_functions in results.items():
+                if func in file_functions:
+                    if file_path not in part1_by_file:
+                        part1_by_file[file_path] = []
+                    part1_by_file[file_path].append({
+                        "name": func.name,
+                        "type": func.function_type.value,
+                        "start_line": func.start_line,
+                        "end_line": func.end_line,
+                        "file": os.path.basename(file_path),
+                        "full_path": file_path
+                    })
+                    break
+        
+        export_data["part1_functions"] = part1_by_file
+        
+        # Write to file
+        try:
+            with open(output_file, 'w', encoding='utf-8') as f:
+                json.dump(export_data, f, indent=2, ensure_ascii=False)
+            print(f"Part 1 results (no PRINT_UC) exported to '{output_file}' ({len(part1_functions)} functions)")
+        except Exception as e:
+            print(f"Error exporting Part 1 results to '{output_file}': {e}")
+    
+    @staticmethod
+    def export_part2_results(results: Dict[str, List[FunctionInfo]], output_file: str):
+        """Export Part 2 results (functions/altsteps WITH multiple PRINT_UC objects or statements) to JSON file."""
+        if not results:
+            print("No results to export for Part 2.")
+            return
+        
+        # Collect all functions from all files
+        all_functions = []
+        for file_path, functions in results.items():
+            all_functions.extend(functions)
+        
+        # Part 2: Functions/altsteps WITH multiple PRINT_UC or multiple objects
+        part2_functions = [f for f in all_functions if f.qualifies_for_part2]
+        
+        if not part2_functions:
+            print("No Part 2 functions (with multiple PRINT_UC objects/statements) found to export.")
+            return
+        
+        # Prepare export data
+        export_data = {
+            "summary": {
+                "total_part2_functions": len(part2_functions),
+                "files_processed": len(results),
+                "description": "Functions and altsteps WITH multiple objects in PRINT_UC OR multiple PRINT_UC statements"
+            },
+            "part2_functions": {}
+        }
+        
+        # Group Part 2 functions by file
+        part2_by_file = {}
+        for func in part2_functions:
+            for file_path, file_functions in results.items():
+                if func in file_functions:
+                    if file_path not in part2_by_file:
+                        part2_by_file[file_path] = []
+                    
+                    func_data = {
+                        "name": func.name,
+                        "type": func.function_type.value,
+                        "start_line": func.start_line,
+                        "end_line": func.end_line,
+                        "file": os.path.basename(file_path),
+                        "full_path": file_path,
+                        "reasons": [],
+                        "print_uc_count": len(func.print_uc_occurrences),
+                        "print_uc_occurrences": []
+                    }
+                    
+                    # Add reasons
+                    if func.has_multiple_print_uc:
+                        func_data["reasons"].append(f"Multiple PRINT_UC statements ({len(func.print_uc_occurrences)})")
+                    if func.has_print_uc_with_multiple_objects:
+                        multi_obj_occurrences = [occ for occ in func.print_uc_occurrences if occ.object_count > 1]
+                        func_data["reasons"].append(f"PRINT_UC with multiple objects ({len(multi_obj_occurrences)} occurrences)")
+                    
+                    # Add PRINT_UC details
+                    for occurrence in func.print_uc_occurrences:
+                        func_data["print_uc_occurrences"].append({
+                            "line_number": occurrence.line_number,
+                            "object_count": occurrence.object_count,
+                            "statement": occurrence.full_statement
+                        })
+                    
+                    part2_by_file[file_path].append(func_data)
+                    break
+        
+        export_data["part2_functions"] = part2_by_file
+        
+        # Write to file
+        try:
+            with open(output_file, 'w', encoding='utf-8') as f:
+                json.dump(export_data, f, indent=2, ensure_ascii=False)
+            print(f"Part 2 results (with PRINT_UC rules) exported to '{output_file}' ({len(part2_functions)} functions)")
+        except Exception as e:
+            print(f"Error exporting Part 2 results to '{output_file}': {e}")
 
 
 def main():
@@ -521,8 +654,11 @@ def main():
 Examples:
   %(prog)s /path/to/ttcn3/code                     # Parse directory
   %(prog)s -r /path/to/ttcn3/code                  # Parse directory recursively
-  %(prog)s -o results.json /path/to/ttcn3/code     # Parse and export to JSON
-  %(prog)s -r -o results.json .                    # Parse current dir recursively and export
+  %(prog)s -o results.json /path/to/ttcn3/code     # Parse and export complete results
+  %(prog)s --out_no_pfs part1.json .               # Export only Part 1 (no PRINT_UC)
+  %(prog)s --out_pfs part2.json .                  # Export only Part 2 (PRINT_UC rules)
+  %(prog)s --out_no_pfs part1.json --out_pfs part2.json .  # Export both parts separately
+  %(prog)s -r -o full.json --out_no_pfs p1.json .  # Recursive with multiple exports
   %(prog)s single_file.ttcn                        # Parse single file
         """
     )
@@ -542,6 +678,21 @@ Examples:
         '-o', '--output', 
         help='Output file to export results in JSON format'
     )
+    arg_parser.add_argument(
+        '--out_no_pfs',
+        metavar='filename.json',
+        help='Export Part 1 results (functions/altsteps WITHOUT PRINT_UC) to JSON file'
+    )
+    arg_parser.add_argument(
+        '--out_pfs',
+        metavar='filename.json', 
+        help='Export Part 2 results (functions/altsteps WITH multiple PRINT_UC objects or statements) to JSON file'
+    )
+    
+    # Show help if no arguments provided
+    if len(sys.argv) == 1:
+        arg_parser.print_help()
+        return 0
     
     args = arg_parser.parse_args()
     
@@ -555,7 +706,11 @@ Examples:
     if args.recursive:
         print("Mode: Recursive search enabled")
     if args.output:
-        print(f"Output file: {args.output}")
+        print(f"Complete results output: {args.output}")
+    if args.out_no_pfs:
+        print(f"Part 1 output (no PRINT_UC): {args.out_no_pfs}")
+    if args.out_pfs:
+        print(f"Part 2 output (PRINT_UC rules): {args.out_pfs}")
     print()
     
     # Determine if target is a file or directory
@@ -575,10 +730,24 @@ Examples:
     # Display results
     formatter.print_results(results)
     
-    # Export results if output file specified
+    # Export results if output files specified
+    export_performed = False
     if args.output:
         print()  # Add spacing before export message
         formatter.export_results(results, args.output)
+        export_performed = True
+    
+    if args.out_no_pfs:
+        if not export_performed:
+            print()  # Add spacing before export message
+        formatter.export_part1_results(results, args.out_no_pfs)
+        export_performed = True
+    
+    if args.out_pfs:
+        if not export_performed:
+            print()  # Add spacing before export message
+        formatter.export_part2_results(results, args.out_pfs)
+        export_performed = True
     
     return 0
 
