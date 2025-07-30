@@ -14,9 +14,11 @@ Version: 1.0
 import re
 import sys
 import os
+import argparse
+import json
 from typing import List, Dict, Set, Tuple, NamedTuple
 from pathlib import Path
-from dataclasses import dataclass
+from dataclasses import dataclass, asdict
 from enum import Enum
 
 
@@ -249,7 +251,7 @@ class TTCN3Parser:
             print(f"Error parsing file '{file_path}': {e}")
             return []
     
-    def parse_directory(self, directory_path: str) -> Dict[str, List[FunctionInfo]]:
+    def parse_directory(self, directory_path: str, recursive: bool = False) -> Dict[str, List[FunctionInfo]]:
         """Parse all TTCN-3 files in a directory."""
         results = {}
         directory = Path(directory_path)
@@ -258,11 +260,18 @@ class TTCN3Parser:
             print(f"Error: Directory '{directory_path}' does not exist.")
             return results
         
-        ttcn_files = list(directory.glob("*.ttcn")) + list(directory.glob("*.ttcn3"))
+        # Use recursive globbing if requested
+        if recursive:
+            ttcn_files = list(directory.rglob("*.ttcn")) + list(directory.rglob("*.ttcn3"))
+        else:
+            ttcn_files = list(directory.glob("*.ttcn")) + list(directory.glob("*.ttcn3"))
         
         if not ttcn_files:
-            print(f"No TTCN-3 files found in '{directory_path}'.")
+            search_type = "recursively" if recursive else ""
+            print(f"No TTCN-3 files found {search_type} in '{directory_path}'.")
             return results
+        
+        print(f"Found {len(ttcn_files)} TTCN-3 files {'(recursive search)' if recursive else ''}")
         
         for file_path in ttcn_files:
             functions = self.parse_file(str(file_path))
@@ -384,40 +393,195 @@ class ResultFormatter:
         print(f"Functions WITHOUT PRINT_UC (Part 1): {functions_without_print}")
         print(f"Functions qualifying for Part 2: {functions_part2}")
         print(f"Files processed: {len(results)}")
+    
+    @staticmethod
+    def export_results(results: Dict[str, List[FunctionInfo]], output_file: str):
+        """Export results to a file in JSON format."""
+        if not results:
+            print("No results to export.")
+            return
+        
+        # Collect all functions from all files
+        all_functions = []
+        for file_path, functions in results.items():
+            all_functions.extend(functions)
+        
+        if not all_functions:
+            print("No functions or altsteps found to export.")
+            return
+        
+        # Part 1: Functions/altsteps WITHOUT PRINT_UC
+        part1_functions = [f for f in all_functions if not f.has_print_uc]
+        
+        # Part 2: Functions/altsteps WITH multiple PRINT_UC or multiple objects
+        part2_functions = [f for f in all_functions if f.qualifies_for_part2]
+        
+        # Prepare export data
+        export_data = {
+            "summary": {
+                "total_functions": len(all_functions),
+                "functions_with_print_uc": len([f for f in all_functions if f.has_print_uc]),
+                "functions_without_print_uc_part1": len(part1_functions),
+                "functions_qualifying_part2": len(part2_functions),
+                "files_processed": len(results)
+            },
+            "part1_functions": [],
+            "part2_functions": [],
+            "all_functions_details": []
+        }
+        
+        # Group Part 1 functions by file
+        part1_by_file = {}
+        for func in part1_functions:
+            for file_path, file_functions in results.items():
+                if func in file_functions:
+                    if file_path not in part1_by_file:
+                        part1_by_file[file_path] = []
+                    part1_by_file[file_path].append({
+                        "name": func.name,
+                        "type": func.function_type.value,
+                        "start_line": func.start_line,
+                        "end_line": func.end_line,
+                        "file": os.path.basename(file_path)
+                    })
+                    break
+        
+        export_data["part1_functions"] = part1_by_file
+        
+        # Group Part 2 functions by file
+        part2_by_file = {}
+        for func in part2_functions:
+            for file_path, file_functions in results.items():
+                if func in file_functions:
+                    if file_path not in part2_by_file:
+                        part2_by_file[file_path] = []
+                    
+                    func_data = {
+                        "name": func.name,
+                        "type": func.function_type.value,
+                        "start_line": func.start_line,
+                        "end_line": func.end_line,
+                        "file": os.path.basename(file_path),
+                        "reasons": [],
+                        "print_uc_occurrences": []
+                    }
+                    
+                    # Add reasons
+                    if func.has_multiple_print_uc:
+                        func_data["reasons"].append(f"Multiple PRINT_UC statements ({len(func.print_uc_occurrences)})")
+                    if func.has_print_uc_with_multiple_objects:
+                        multi_obj_occurrences = [occ for occ in func.print_uc_occurrences if occ.object_count > 1]
+                        func_data["reasons"].append(f"PRINT_UC with multiple objects ({len(multi_obj_occurrences)} occurrences)")
+                    
+                    # Add PRINT_UC details
+                    for occurrence in func.print_uc_occurrences:
+                        func_data["print_uc_occurrences"].append({
+                            "line_number": occurrence.line_number,
+                            "object_count": occurrence.object_count,
+                            "statement": occurrence.full_statement
+                        })
+                    
+                    part2_by_file[file_path].append(func_data)
+                    break
+        
+        export_data["part2_functions"] = part2_by_file
+        
+        # Add all functions details for reference
+        for file_path, functions in results.items():
+            for func in functions:
+                func_detail = {
+                    "name": func.name,
+                    "type": func.function_type.value,
+                    "file": file_path,
+                    "start_line": func.start_line,
+                    "end_line": func.end_line,
+                    "has_print_uc": func.has_print_uc,
+                    "qualifies_part1": not func.has_print_uc,
+                    "qualifies_part2": func.qualifies_for_part2,
+                    "print_uc_count": len(func.print_uc_occurrences)
+                }
+                export_data["all_functions_details"].append(func_detail)
+        
+        # Write to file
+        try:
+            with open(output_file, 'w', encoding='utf-8') as f:
+                json.dump(export_data, f, indent=2, ensure_ascii=False)
+            print(f"Results exported to '{output_file}'")
+        except Exception as e:
+            print(f"Error exporting results to '{output_file}': {e}")
 
 
 def main():
     """Main function to run the TTCN-3 parser."""
-    parser = TTCN3Parser()
-    formatter = ResultFormatter()
+    # Set up command line argument parsing
+    arg_parser = argparse.ArgumentParser(
+        description="Advanced TTCN-3 Parser for PRINT_UC Analysis",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  %(prog)s /path/to/ttcn3/code                     # Parse directory
+  %(prog)s -r /path/to/ttcn3/code                  # Parse directory recursively
+  %(prog)s -o results.json /path/to/ttcn3/code     # Parse and export to JSON
+  %(prog)s -r -o results.json .                    # Parse current dir recursively and export
+  %(prog)s single_file.ttcn                        # Parse single file
+        """
+    )
     
-    # Check command line arguments
-    if len(sys.argv) > 1:
-        target_path = sys.argv[1]
-    else:
-        target_path = "."  # Current directory
+    arg_parser.add_argument(
+        'path', 
+        nargs='?', 
+        default='.', 
+        help='Path to TTCN-3 file or directory to analyze (default: current directory)'
+    )
+    arg_parser.add_argument(
+        '-r', '--recursive', 
+        action='store_true', 
+        help='Search for TTCN-3 files recursively in subdirectories'
+    )
+    arg_parser.add_argument(
+        '-o', '--output', 
+        help='Output file to export results in JSON format'
+    )
+    
+    args = arg_parser.parse_args()
+    
+    # Initialize parser and formatter
+    ttcn_parser = TTCN3Parser()
+    formatter = ResultFormatter()
     
     print("Advanced TTCN-3 Parser for PRINT_UC Analysis")
     print("=" * 50)
-    print(f"Analyzing: {target_path}")
+    print(f"Analyzing: {args.path}")
+    if args.recursive:
+        print("Mode: Recursive search enabled")
+    if args.output:
+        print(f"Output file: {args.output}")
+    print()
     
     # Determine if target is a file or directory
-    if os.path.isfile(target_path):
-        if target_path.endswith(('.ttcn', '.ttcn3')):
-            functions = parser.parse_file(target_path)
-            results = {target_path: functions} if functions else {}
+    if os.path.isfile(args.path):
+        if args.path.endswith(('.ttcn', '.ttcn3')):
+            functions = ttcn_parser.parse_file(args.path)
+            results = {args.path: functions} if functions else {}
         else:
-            print(f"Error: '{target_path}' is not a TTCN-3 file.")
-            return
-    elif os.path.isdir(target_path):
-        results = parser.parse_directory(target_path)
+            print(f"Error: '{args.path}' is not a TTCN-3 file.")
+            return 1
+    elif os.path.isdir(args.path):
+        results = ttcn_parser.parse_directory(args.path, recursive=args.recursive)
     else:
-        print(f"Error: '{target_path}' does not exist.")
-        return
+        print(f"Error: '{args.path}' does not exist.")
+        return 1
     
     # Display results
     formatter.print_results(results)
+    
+    # Export results if output file specified
+    if args.output:
+        print()  # Add spacing before export message
+        formatter.export_results(results, args.output)
+    
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
