@@ -15,8 +15,11 @@ FIXES APPLIED:
 4. Enhanced brace matching algorithm
 5. More comprehensive PRINT_UC detection
 6. Better error handling and debugging
+7. FIXED: Proper handling of both forms:
+   - log(PRINT_UC, "obj1, obj2, obj3") - counts as 1 object
+   - log(PRINT_UC, "obj1", "obj2", "obj3") - counts as 3 objects
 
-Version: 1.1 - FIXED
+Version: 1.2 - PRINT_UC Object Counting FIXED
 """
 
 import re
@@ -316,7 +319,7 @@ class TTCN3Parser:
                     # Extract the complete log statement
                     full_statement = self.extract_complete_log_statement(line, match.start())
                     if full_statement:
-                        object_count = self.count_print_uc_objects(full_statement)
+                        object_count = self.count_print_uc_objects_fixed(full_statement)
                         
                         # Avoid duplicates by checking if we already found this statement
                         statement_key = full_statement.replace(' ', '').replace('\t', '').replace('\n', '')
@@ -352,10 +355,16 @@ class TTCN3Parser:
         
         return line[log_start:paren_end + 1].strip()
     
-    def count_print_uc_objects(self, print_uc_statement: str) -> int:
+    def count_print_uc_objects_fixed(self, print_uc_statement: str) -> int:
         """
         FIXED: Count the number of objects in a log(PRINT_UC, ...) statement.
-        More robust parsing that handles various edge cases.
+        
+        Properly handles both forms:
+        1. log(PRINT_UC, "obj1, obj2, obj3") - counts as 1 object (single string)
+        2. log(PRINT_UC, "obj1", "obj2", "obj3") - counts as 3 objects (separate parameters)
+        
+        The key insight is that we need to count the comma-separated PARAMETERS to the log function,
+        not commas within string literals.
         """
         # Extract content after log(PRINT_UC,
         match = re.search(r'log\s*\(\s*PRINT_UC\s*(?:,\s*(.*))?\)', print_uc_statement, re.IGNORECASE | re.DOTALL)
@@ -368,49 +377,83 @@ class TTCN3Parser:
         
         content = content.strip()
         
-        # FIXED: Better object counting that handles nested structures
+        # FIXED: Enhanced object counting that properly handles string literals
+        # This counts actual parameters to the log function, not content within strings
         objects = []
         current_object = ""
         paren_depth = 0
         bracket_depth = 0
         brace_depth = 0
-        quote_depth = 0
+        in_string = False
+        escape_next = False
         
         i = 0
         while i < len(content):
             char = content[i]
             
-            if char == '"' and (i == 0 or content[i-1] != '\\'):
-                quote_depth = 1 - quote_depth
-            elif quote_depth == 0:
+            # Handle escape sequences in strings
+            if escape_next:
+                current_object += char
+                escape_next = False
+                i += 1
+                continue
+            
+            if char == '\\' and in_string:
+                escape_next = True
+                current_object += char
+                i += 1
+                continue
+            
+            # Handle string boundaries
+            if char == '"':
+                in_string = not in_string
+                current_object += char
+            elif not in_string:
+                # Only count structural elements when not inside a string
                 if char == '(':
                     paren_depth += 1
+                    current_object += char
                 elif char == ')':
                     paren_depth -= 1
+                    current_object += char
                 elif char == '[':
                     bracket_depth += 1
+                    current_object += char
                 elif char == ']':
                     bracket_depth -= 1
+                    current_object += char
                 elif char == '{':
                     brace_depth += 1
+                    current_object += char
                 elif char == '}':
                     brace_depth -= 1
+                    current_object += char
                 elif char == ',' and paren_depth == 0 and bracket_depth == 0 and brace_depth == 0:
-                    # Found a top-level comma, this separates objects
+                    # Found a top-level comma (parameter separator)
                     obj = current_object.strip()
                     if obj:
                         objects.append(obj)
                     current_object = ""
                     i += 1
                     continue
+                else:
+                    current_object += char
+            else:
+                # Inside a string, just add the character
+                current_object += char
             
-            current_object += char
             i += 1
         
         # Add the last object
         obj = current_object.strip()
         if obj:
             objects.append(obj)
+        
+        # Debug output for verification (can be removed in production)
+        if len(objects) > 1:
+            print(f"DEBUG: Found {len(objects)} objects in: {print_uc_statement}")
+            for i, obj in enumerate(objects):
+                print(f"  Object {i+1}: {obj}")
         
         return len(objects)
     
@@ -1040,7 +1083,11 @@ Examples:
   %(prog)s --debug /path/to/ttcn3/code              # Enable detailed debug output
   %(prog)s --only_names -o names.json .             # Export only function names
   %(prog)s --only_names --out_pfs part2_names.json . # Export only Part 2 function names
-        """
+
+PRINT_UC Object Counting Rules:
+  log(PRINT_UC, "obj1, obj2, obj3")     → 1 object  (single string parameter)
+  log(PRINT_UC, "obj1", "obj2", "obj3") → 3 objects (three separate parameters)
+        """,
     )
     
     arg_parser.add_argument(
@@ -1090,8 +1137,8 @@ Examples:
     ttcn_parser = TTCN3Parser()
     formatter = ResultFormatter()
     
-    print("Advanced TTCN-3 Parser for PRINT_UC Analysis - FIXED VERSION")
-    print("=" * 60)
+    print("Advanced TTCN-3 Parser for PRINT_UC Analysis - FIXED VERSION v1.2")
+    print("=" * 70)
     print(f"Analyzing: {args.path}")
     if args.recursive:
         print("Mode: Recursive search enabled")
@@ -1105,6 +1152,10 @@ Examples:
         print("Debug mode enabled: Detailed parsing information will be printed.")
     if args.only_names:
         print("Only names mode enabled: Will output only function names.")
+    
+    print("\nPRINT_UC Object Counting Rules:")
+    print('  log(PRINT_UC, "obj1, obj2, obj3")     → 1 object  (single string parameter)')
+    print('  log(PRINT_UC, "obj1", "obj2", "obj3") → 3 objects (three separate parameters)')
     print()
     
     # Determine if target is a file or directory
