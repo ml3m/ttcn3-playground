@@ -933,7 +933,7 @@ class ResultFormatter:
         return f"  {type_str} {func_info.name} [Lines {func_info.start_line}-{func_info.end_line}]{print_uc_info}"
     
     @staticmethod
-    def print_results(results: Dict[str, List[FunctionInfo]]):
+    def print_results(results: Dict[str, List[FunctionInfo]], include_testcases: bool = False):
         """Print formatted results for both parts."""
         if not results:
             print("No TTCN-3 files found or parsed.")
@@ -955,13 +955,15 @@ class ResultFormatter:
             else:
                 files_without_functions += 1
         
+        entity_type = "functions/altsteps/testcases" if include_testcases else "functions/altsteps"
+        
         if not all_functions:
-            print("No functions or altsteps found in any files.")
+            print(f"No {entity_type} found in any files.")
             print(f"\nFiles examined: {len(results)}")
-            print(f"Files without functions/altsteps: {files_without_functions}")
+            print(f"Files without {entity_type}: {files_without_functions}")
             
             if files_without_functions > 0:
-                print("\nFiles without functions/altsteps:")
+                print(f"\nFiles without {entity_type}:")
                 for file_path, functions in results.items():
                     if not functions:
                         print(f"  {os.path.basename(file_path)}")
@@ -970,7 +972,7 @@ class ResultFormatter:
         # Part 1: Functions/altsteps WITHOUT PRINT_UC
         part1_functions = [f for f in all_functions if not f.has_print_uc]
         
-        print(f"\nPART 1: Functions/Altsteps WITHOUT PRINT_UC ({len(part1_functions)} found)")
+        print(f"\nPART 1: {entity_type.title()} WITHOUT PRINT_UC ({len(part1_functions)} found)")
         print("-" * 60)
         
         if part1_functions:
@@ -995,7 +997,7 @@ class ResultFormatter:
         # Part 2: Functions/altsteps WITH multiple PRINT_UC or multiple objects
         part2_functions = [f for f in all_functions if f.qualifies_for_part2]
         
-        print(f"\nPART 2: Functions/Altsteps WITH multiple PRINT_UC objects or statements ({len(part2_functions)} found)")
+        print(f"\nPART 2: {entity_type.title()} WITH multiple PRINT_UC objects or statements ({len(part2_functions)} found)")
         print("-" * 80)
         
         if part2_functions:
@@ -1038,22 +1040,22 @@ class ResultFormatter:
         functions_part2 = len(part2_functions)
         
         print(f"Total files examined: {len(results)}")
-        print(f"Files with functions/altsteps: {files_with_functions}")
-        print(f"Files without functions/altsteps: {files_without_functions}")
-        print(f"Total functions/altsteps analyzed: {total_functions}")
-        print(f"Functions WITH PRINT_UC: {functions_with_print}")
-        print(f"Functions WITHOUT PRINT_UC (Part 1): {functions_without_print}")
-        print(f"Functions qualifying for Part 2: {functions_part2}")
+        print(f"Files with {entity_type}: {files_with_functions}")
+        print(f"Files without {entity_type}: {files_without_functions}")
+        print(f"Total {entity_type} analyzed: {total_functions}")
+        print(f"{entity_type.title()} WITH PRINT_UC: {functions_with_print}")
+        print(f"{entity_type.title()} WITHOUT PRINT_UC (Part 1): {functions_without_print}")
+        print(f"{entity_type.title()} qualifying for Part 2: {functions_part2}")
         
         # Show files without functions if any
         if files_without_functions > 0:
-            print(f"\nFiles without functions/altsteps:")
+            print(f"\nFiles without {entity_type}:")
             for file_path, functions in results.items():
                 if not functions:
                     print(f"  {os.path.basename(file_path)}")
         
         # Show files with candidates (functions/altsteps)
-        print(f"\nFiles with candidates (functions/altsteps):")
+        print(f"\nFiles with candidates ({entity_type}):")
         for file_path, functions in results.items():
             if functions:
                 print(f"  {os.path.basename(file_path)} ({len(functions)} candidates)")
@@ -1063,7 +1065,6 @@ class ResultFormatter:
         print("EXECUTION COMPLETE")
         print("=" * 80)
         print(f"✅ Successfully processed {len(results)} TTCN-3 files")
-        entity_type = "functions/altsteps/testcases" if args.include_testcases else "functions/altsteps"
         print(f"📁 Files with candidates: {files_with_functions}")
         print(f"📄 Files without candidates: {files_without_functions}")
         print(f"🔍 Total candidates analyzed: {total_functions}")
@@ -1487,7 +1488,7 @@ PRINT_UC Object Counting Rules:
         return 1
     
     # Display results
-    formatter.print_results(results)
+    formatter.print_results(results, args.include_testcases)
     
     # Export results if output files specified
     export_performed = False
